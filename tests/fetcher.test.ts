@@ -115,4 +115,20 @@ describe('Product URL Fetcher', () => {
     expect(result.partial).toBe(true);
     expect(result.store_name).toBe('Best Buy');
   });
+
+  it('rejects IPv4-mapped IPv6 addresses and unsafe HTTP redirects', async () => {
+    expect(() => validateSafeExternalUrl('http://[::ffff:127.0.0.1]/admin')).toThrow();
+    expect(() => validateSafeExternalUrl('http://[::ffff:192.168.1.1]/router')).toThrow();
+    expect(() => validateSafeExternalUrl('http://[::]/')).toThrow();
+
+    await expect(
+      fetchProductMetadata('https://short.example.com/deal', {
+        fetchFn: async () =>
+          new Response(null, {
+            status: 302,
+            headers: { location: 'http://127.0.0.1:8080/internal' },
+          }),
+      })
+    ).rejects.toThrow(/Private or loopback|Localhost|not allowed/i);
+  });
 });

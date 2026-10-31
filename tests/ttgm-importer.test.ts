@@ -100,4 +100,36 @@ describe('Things To Get Me Importer', () => {
     expect(hurley.image_url).toBe('https://m.media-amazon.com/images/I/hurley.jpg');
     expect(hurley.size).toBe('Medium');
   });
+
+  it('resolves relative image URLs in Things To Get Me imports against thingstogetme.com', async () => {
+    const owner = db.createUser({ email: 'blake2@example.com', display_name: 'Blake' });
+    const list = db.createWishlist(owner.id, { title: 'Blake Christmas' });
+
+    const htmlWithRelativeImg = `
+      <script>
+      window.ttgmList = ${JSON.stringify({
+        name: 'Blake Christmas',
+        items: [
+          {
+            key: 'rel-img-item',
+            name: 'Relative Image Item',
+            price: '$25.00',
+            url: 'https://www.amazon.com/dp/B000123',
+            image: '/public/images/url/sample.jpg',
+            note: '',
+            received: null,
+            item_users: [],
+          },
+        ],
+      })};
+      </script>
+    `;
+
+    const summary = await importTtgmList(db, list.id, '902589a87070', {
+      fetchHtmlFn: async () => htmlWithRelativeImg,
+    });
+    expect(summary.items[0].image_url).toBe(
+      'https://www.thingstogetme.com/public/images/url/sample.jpg'
+    );
+  });
 });

@@ -10,10 +10,35 @@ export class UnsafeUrlError extends Error {
 }
 
 function isPrivateIp(ip: string): boolean {
-  if (ip === '::1' || ip === '0.0.0.0' || ip.startsWith('fe80:') || ip.startsWith('fc') || ip.startsWith('fd')) {
+  const lower = ip.toLowerCase();
+  if (
+    lower === '::' ||
+    lower === '::1' ||
+    lower === '0.0.0.0' ||
+    lower.startsWith('fe80:') ||
+    lower.startsWith('fc') ||
+    lower.startsWith('fd')
+  ) {
     return true;
   }
-  const parts = ip.split('.').map(Number);
+
+  if (lower.startsWith('::ffff:')) {
+    const suffix = lower.slice(7);
+    if (suffix.includes('.')) {
+      return isPrivateIp(suffix);
+    }
+    const hexParts = suffix.split(':');
+    if (hexParts.length === 2) {
+      const hi = parseInt(hexParts[0], 16);
+      const lo = parseInt(hexParts[1], 16);
+      if (!Number.isNaN(hi) && !Number.isNaN(lo)) {
+        const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+        return isPrivateIp(ipv4);
+      }
+    }
+  }
+
+  const parts = lower.split('.').map(Number);
   if (parts.length === 4 && parts.every((n) => !Number.isNaN(n))) {
     const [a, b] = parts;
     if (a === 10 || a === 127 || a === 0) return true;
@@ -370,18 +395,33 @@ export async function fetchProductMetadata(
   const fetchImpl = options?.fetchFn || fetch;
 
   try {
-    const response = await fetchImpl(normalizedUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(10000),
-    });
+    let currentUrl = normalizedUrl;
+    let response: Response | null = null;
 
-    if (!response.ok) {
+    for (let hop = 0; hop < 5; hop++) {
+      response = await fetchImpl(currentUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+          Accept:
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) break;
+        const resolvedRedirect = new URL(location, currentUrl).toString();
+        currentUrl = validateSafeExternalUrl(resolvedRedirect).toString();
+        continue;
+      }
+      break;
+    }
+
+    if (!response || !response.ok) {
       return {
         url: normalizedUrl,
         name: extractSlugFallbackTitle(normalizedUrl),
@@ -396,8 +436,11 @@ export async function fetchProductMetadata(
     }
 
     const html = await response.text();
-    return parseProductHtml(html, normalizedUrl);
-  } catch {
+    return parseProductHtml(html, currentUrl);
+  } catch (err) {
+    if (err instanceof UnsafeUrlError) {
+      throw err;
+    }
     return {
       url: normalizedUrl,
       name: extractSlugFallbackTitle(normalizedUrl),

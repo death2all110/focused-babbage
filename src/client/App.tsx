@@ -496,46 +496,44 @@ export const App: React.FC = () => {
 
             <div className="p-5 space-y-4">
               {/* OAuth Buttons */}
-              <div className="space-y-2">
-                <a
-                  href="/api/auth/oauth/google"
-                  className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
-                    oauthProviders.google
-                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-50 border-slate-600'
-                      : 'bg-slate-900/50 text-slate-400 border-slate-800'
-                  }`}
-                >
-                  <span>Continue with Google</span>
-                </a>
-                <a
-                  href="/api/auth/oauth/facebook"
-                  className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
-                    oauthProviders.facebook
-                      ? 'bg-blue-950/80 hover:bg-blue-900/80 text-blue-100 border-blue-700'
-                      : 'bg-slate-900/50 text-slate-400 border-slate-800'
-                  }`}
-                >
-                  <span>Continue with Facebook</span>
-                </a>
-                <a
-                  href="/api/auth/oauth/amazon"
-                  className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
-                    oauthProviders.amazon
-                      ? 'bg-amber-950/80 hover:bg-amber-900/80 text-amber-100 border-amber-700'
-                      : 'bg-slate-900/50 text-slate-400 border-slate-800'
-                  }`}
-                >
-                  <span>Login with Amazon</span>
-                </a>
-              </div>
+              {(oauthProviders.google || oauthProviders.facebook || oauthProviders.amazon) && (
+                <>
+                  <div className="space-y-2">
+                    {oauthProviders.google && (
+                      <a
+                        href="/api/auth/oauth/google"
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border bg-slate-800 hover:bg-slate-700 text-slate-50 border-slate-600 transition-colors"
+                      >
+                        <span>Continue with Google</span>
+                      </a>
+                    )}
+                    {oauthProviders.facebook && (
+                      <a
+                        href="/api/auth/oauth/facebook"
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border bg-blue-950/80 hover:bg-blue-900/80 text-blue-100 border-blue-700 transition-colors"
+                      >
+                        <span>Continue with Facebook</span>
+                      </a>
+                    )}
+                    {oauthProviders.amazon && (
+                      <a
+                        href="/api/auth/oauth/amazon"
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold border bg-amber-950/80 hover:bg-amber-900/80 text-amber-100 border-amber-700 transition-colors"
+                      >
+                        <span>Login with Amazon</span>
+                      </a>
+                    )}
+                  </div>
 
-              <div className="relative flex py-1 items-center">
-                <div className="flex-grow border-t border-slate-800" />
-                <span className="flex-shrink mx-3 text-xs uppercase text-slate-400">
-                  Or use email
-                </span>
-                <div className="flex-grow border-t border-slate-800" />
-              </div>
+                  <div className="relative flex py-1 items-center">
+                    <div className="flex-grow border-t border-slate-800" />
+                    <span className="flex-shrink mx-3 text-xs uppercase text-slate-400">
+                      Or use email
+                    </span>
+                    <div className="flex-grow border-t border-slate-800" />
+                  </div>
+                </>
+              )}
 
               <form onSubmit={handleAuthSubmit} className="space-y-3">
                 {authMode === 'register' && (

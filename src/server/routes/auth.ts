@@ -150,6 +150,12 @@ export function createAuthRouter(
       return;
     }
 
+    const configured = getConfiguredOAuthProviders(env);
+    if (!configured[provider]) {
+      res.status(400).json({ error: `${provider} OAuth is not configured on this server.` });
+      return;
+    }
+
     const state = crypto.randomBytes(16).toString('hex');
     res.cookie(OAUTH_STATE_COOKIE, state, {
       httpOnly: true,

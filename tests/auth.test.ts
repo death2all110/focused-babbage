@@ -20,6 +20,10 @@ describe('Authentication & OAuth', () => {
       '/api/auth',
       createAuthRouter(db, {
         sessionSecret: 'test-secret',
+        env: {
+          AMAZON_CLIENT_ID: 'amz-id',
+          AMAZON_CLIENT_SECRET: 'amz-sec',
+        },
         oauthExchangeFn: async (provider, code) => ({
           provider,
           provider_account_id: `${provider}-${code}`,
@@ -68,5 +72,11 @@ describe('Authentication & OAuth', () => {
     const sessionCookie = cb.headers['set-cookie'];
     const me = await request(app).get('/api/auth/me').set('Cookie', sessionCookie);
     expect(me.body.user.email).toBe('amazon@example.com');
+  });
+
+  it('returns 400 when initiating OAuth on an unconfigured provider', async () => {
+    const res = await request(app).get('/api/auth/oauth/google');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/not configured/i);
   });
 });

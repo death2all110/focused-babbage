@@ -141,7 +141,14 @@ export async function importTtgmList(
 
     const itemUrl = raw.url?.trim() || null;
     let itemPrice = normalizePrice(raw.price);
-    let itemImage = raw.image?.trim() || null;
+    let itemImage: string | null = null;
+    if (raw.image?.trim()) {
+      try {
+        itemImage = new URL(raw.image.trim(), targetUrl).toString();
+      } catch {
+        itemImage = null;
+      }
+    }
     const noteFields = cleanTtgmNote(raw.note);
     let itemColor = noteFields.color;
     let itemSize = noteFields.size;
