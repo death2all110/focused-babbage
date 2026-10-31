@@ -70,11 +70,17 @@ export interface AppDatabase {
     viewerUserId?: number | null
   ):
     | { status: 'ok'; item: WishlistItem }
-    | { status: 'not_found' | 'already_reserved' | 'owner_forbidden' | 'invalid_name' };
+    | { status: 'not_found' }
+    | { status: 'already_reserved' }
+    | { status: 'owner_forbidden' }
+    | { status: 'invalid_name' };
   unreserveItem(
     itemId: number,
     viewerUserId?: number | null
-  ): { status: 'ok'; item: WishlistItem } | { status: 'not_found' | 'owner_forbidden' };
+  ):
+    | { status: 'ok'; item: WishlistItem }
+    | { status: 'not_found' }
+    | { status: 'owner_forbidden' };
 }
 
 function generateSlug(title: string): string {
