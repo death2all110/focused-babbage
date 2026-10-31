@@ -1,0 +1,22 @@
+services:
+  family-wishlist:
+    build: .
+    image: family-wishlist:latest
+    container_name: family-wishlist
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - /mnt/user/appdata/family-wishlist:/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATA_DIR=/data
+      - APP_URL=${APP_URL:-http://localhost:3000}
+      - SESSION_SECRET=${SESSION_SECRET:-change-me-in-production}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - FACEBOOK_CLIENT_ID=${FACEBOOK_CLIENT_ID:-}
+      - FACEBOOK_CLIENT_SECRET=${FACEBOOK_CLIENT_SECRET:-}
+      - AMAZON_CLIENT_ID=${AMAZON_CLIENT_ID:-}
+      - AMAZON_CLIENT_SECRET=${AMAZON_CLIENT_SECRET:-}
