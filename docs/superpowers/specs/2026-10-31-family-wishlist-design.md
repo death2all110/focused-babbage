@@ -22,6 +22,12 @@ The user and their family rely on a shared wishlist workflow (especially around 
 ### Goals
 - **Frictionless Wishlist Creation & Sharing:** Authenticated users can create wishlists, add/edit/delete items, and copy a clean shareable URL (with rich OpenGraph preview tags so links look great when pasted into Facebook Messenger).
 - **Reliable Multi-Store URL Fetching:** Pasting a product URL automatically extracts **Name, Price, Photo(s), and Link**, plus **Color, Size, and Model** when present on the page, working across Amazon, Walmart, Target, Best Buy, Kohl's, and general e-commerce stores using OpenGraph / `schema.org/Product` JSON-LD / store-specific parsers / headless browser fallback.
+- **One-Click *Things To Get Me* List Import:** Family members can paste their existing `thingstogetme.com/<code-or-url>` link to migrate their list in one step:
+  - Parses the embedded `window.ttgmList` / `window.list` JSON payload from the *Things To Get Me* page.
+  - **Skips already-received items** from past holidays (`item.received !== null`).
+  - **Migrates active reservations** (`item.received === null && item.item_users.length > 0`) silently in the background without revealing them to the list creator.
+  - **Auto-enriches missing details:** For imported items that have a product `url` but are missing an image, price, or variant details (due to *Things To Get Me*'s broken fetcher), automatically runs our multi-layer URL fetcher to fill in the missing photos and metadata.
+  - Cleans up legacy *Things To Get Me* note artifacts (e.g., stripping `> medium, > Needs 1 has 0` boilerplate while preserving meaningful notes like `Size: 34x28` or `Dark Gray/Blue, Size 10.5` and mapping detected Size/Color into their structured fields).
 - **Always-Editable Item Fields:** Every fetched field (Name, Price, Photo URL, Product Link, Color, Size, Model/Notes) is immediately editable before and after saving so users are never blocked if a store hides a variant or price.
 - **No-Login Guest Viewing & Reserving:** Family members opening a shared link do **not** need an account or login to view the list or reserve items. If not signed in, clicking "Reserve" simply asks for their name (e.g., "Aunt Linda"). If signed in, their account display name is pre-filled.
 - **Spoiler-Free Creator View vs. Two-Tab Visitor View:**
@@ -69,6 +75,11 @@ The user and their family rely on a shared wishlist workflow (especially around 
    - The wishlist creator never sees reservations.
 4. **Visual Styling:**
    - Dark theme where form inputs and textboxes also have a dark background (`#0f172a`) with crisp white/light text (`#f8fafc`) and subtle borders (`#334155`).
+5. ***Things To Get Me* List Migration (`thingstogetme.com` Import):**
+   - Users can paste a *Things To Get Me* URL (e.g., `https://www.thingstogetme.com/902589a87070`) or list code (`902589a87070`) to import an existing list (either into a new wishlist named after `ttgmList.name` or into an existing wishlist).
+   - **Skip Received Items:** Any item where `received !== null` (gifts received in past years) is automatically skipped.
+   - **Migrate Active Reservations Spoiler-Free:** Any active item (`received === null`) with `item_users.length > 0` is imported with `is_reserved = true` (and `reserved_by_name = "Reserved (Imported)"` if *Things To Get Me* anonymized the visitor key) on the backend without exposing the reservation state to the importing list owner.
+   - **Auto-Fetch Missing Details:** For any imported item that has a `url` but is missing its `image`, `price`, `color`, or `size` (such as recently added items affected by *Things To Get Me*'s broken scraper), the importer automatically runs the product URL fetcher to populate the missing photo and metadata.
 
 ---
 
