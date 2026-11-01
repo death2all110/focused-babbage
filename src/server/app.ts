@@ -26,8 +26,16 @@ function escapeHtml(str: string): string {
 function createRateLimiter(maxRequests: number, windowMs: number): express.RequestHandler {
   const hits = new Map<string, { count: number; resetAt: number }>();
   return (req, res, next) => {
-    const key = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+    if (hits.size > 1000) {
+      for (const [k, v] of hits.entries()) {
+        if (now > v.resetAt) hits.delete(k);
+      }
+      if (hits.size > 5000) {
+        hits.clear();
+      }
+    }
+    const key = req.ip || req.socket.remoteAddress || 'unknown';
     const entry = hits.get(key);
     if (!entry || now > entry.resetAt) {
       hits.set(key, { count: 1, resetAt: now + windowMs });
@@ -88,7 +96,12 @@ export function createApp(options?: {
 
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  if (
+    process.env.TRUST_PROXY === 'true' ||
+    (process.env.APP_URL || '').toLowerCase().startsWith('https://')
+  ) {
+    app.set('trust proxy', 1);
+  }
 
   // Baseline HTTP security headers
   app.use((_req, res, next) => {
@@ -148,6 +161,7 @@ export function createApp(options?: {
 
   const authRateLimiter = createRateLimiter(30, 15 * 60 * 1000);
   const fetchRateLimiter = createRateLimiter(60, 5 * 60 * 1000);
+  const reserveRateLimiter = createRateLimiter(40, 5 * 60 * 1000);
 
   app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok' });
@@ -438,7 +452,7 @@ export function createApp(options?: {
   });
 
   // Guest / Visitor reservation endpoints (no login required!)
-  app.post('/api/items/:itemId/reserve', (req, res) => {
+  app.post('/api/items/:itemId/reserve', reserveRateLimiter, (req, res) => {
     const itemId = Number(req.params.itemId);
     const rawBodyName = (req.body as { reserved_by_name?: unknown })?.reserved_by_name;
     if (rawBodyName !== undefined && typeof rawBodyName !== 'string') {
@@ -471,7 +485,7 @@ export function createApp(options?: {
     res.json({ item: result.item });
   });
 
-  app.post('/api/items/:itemId/unreserve', (req, res) => {
+  app.post('/api/items/:itemId/unreserve', reserveRateLimiter, (req, res) => {
     const itemId = Number(req.params.itemId);
     const result = db.unreserveItem(itemId, req.user?.id ?? null);
     if (result.status === 'not_found') {

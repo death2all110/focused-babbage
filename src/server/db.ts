@@ -271,6 +271,9 @@ export function createDatabase(dbPath?: string): AppDatabase {
           avatar_url: input.avatar_url ?? null,
         });
         user = { ...created, password_hash: null };
+      } else if (user.password_hash !== null) {
+        // Prevent pre-auth account takeover: clear any unverified local password when linking OAuth
+        sqlite.prepare('UPDATE users SET password_hash = NULL WHERE id = ?').run(user.id);
       }
 
       sqlite

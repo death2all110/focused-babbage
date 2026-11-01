@@ -206,7 +206,7 @@ export const defaultOAuthExchange: OAuthExchangeFn = async (
       name?: string;
       picture?: string;
     };
-    if (profile.email_verified === false) {
+    if (profile.email_verified !== true) {
       throw new Error('Google account email is not verified');
     }
     return {

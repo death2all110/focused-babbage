@@ -80,6 +80,8 @@ describe('Security Hardening Suite', () => {
   it('CRIT-03: blocks CGNAT/Tailscale IPs, DNS rebinding domains (.nip.io), private DNS resolution, and non-dot TTGM domains', async () => {
     expect(() => validateSafeExternalUrl('http://100.64.0.1/internal')).toThrow();
     expect(() => validateSafeExternalUrl('http://198.18.0.1/bench')).toThrow();
+    expect(() => validateSafeExternalUrl('http://[::127.0.0.1]/compat')).toThrow();
+    expect(() => validateSafeExternalUrl('http://[64:ff9b::192.168.1.1]/nat64')).toThrow();
     expect(() => validateSafeExternalUrl('http://192.168.1.100.nip.io/unraid')).toThrow();
     expect(() => validateSafeExternalUrl('http://127.0.0.1.sslip.io/admin')).toThrow();
 
@@ -163,5 +165,20 @@ describe('Security Hardening Suite', () => {
       .post(`/api/items/${item.id}/reserve`)
       .send({ reserved_by_name: 'A'.repeat(150) });
     expect(longReserve.status).toBe(400);
+
+    // 5. HIGH-02: Pre-registered local password is cleared if the real owner signs in via OAuth
+    await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'victim@example.com', password: 'attackerpassword123', display_name: 'Attacker' });
+    db.upsertOAuthUser({
+      provider: 'google',
+      provider_account_id: 'google-sub-999',
+      email: 'victim@example.com',
+      display_name: 'Real Victim',
+    });
+    const attackerLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'victim@example.com', password: 'attackerpassword123' });
+    expect(attackerLogin.status).toBe(401);
   });
 });

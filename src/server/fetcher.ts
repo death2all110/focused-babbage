@@ -52,6 +52,14 @@ export function isPrivateIp(ip: string): boolean {
     }
   }
 
+  // Block any other IPv6 address outside global unicast 2000::/3 (e.g. [::7f00:1] IPv4-compatible, NAT64 64:ff9b::, 6to4 2002::)
+  if (lower.includes(':')) {
+    if (!/^[23][0-9a-f]{3}:/i.test(lower) || lower.startsWith('2001:db8:') || lower.startsWith('2002:')) {
+      return true;
+    }
+    return false;
+  }
+
   const parts = lower.split('.').map(Number);
   if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
     const [a, b, c] = parts;
