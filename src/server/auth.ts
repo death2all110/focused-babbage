@@ -160,7 +160,7 @@ export function buildOAuthAuthorizeUrl(
     url.searchParams.set('client_id', env.FACEBOOK_CLIENT_ID || '');
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', 'email,public_profile');
+    url.searchParams.set('scope', 'public_profile');
     url.searchParams.set('state', state);
     return url.toString();
   }
@@ -230,7 +230,7 @@ export const defaultOAuthExchange: OAuthExchangeFn = async (
     const tokenData = (await tokenRes.json()) as { access_token: string };
 
     const profileUrl = new URL('https://graph.facebook.com/me');
-    profileUrl.searchParams.set('fields', 'id,name,email,picture');
+    profileUrl.searchParams.set('fields', 'id,name,picture');
     profileUrl.searchParams.set('access_token', tokenData.access_token);
     const profileRes = await fetch(profileUrl.toString());
     if (!profileRes.ok) throw new Error('Facebook profile fetch failed');
