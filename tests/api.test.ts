@@ -67,5 +67,14 @@ describe('Wishlist API & OpenGraph', () => {
     expect(imgRes.status).toBe(200);
     expect(imgRes.headers['content-type']).toMatch(/image\/png/);
     expect(new Uint8Array(imgRes.body)).toEqual(samplePng);
+
+    // Built-in Privacy Policy & Data Deletion pages for Facebook/OAuth compliance
+    const privacyRes = await request(app).get('/privacy');
+    expect(privacyRes.status).toBe(200);
+    expect(privacyRes.text).toContain('Privacy Policy');
+
+    const deletionRes = await request(app).get('/data-deletion');
+    expect(deletionRes.status).toBe(200);
+    expect(deletionRes.text).toContain('User Data Deletion Instructions');
   });
 });

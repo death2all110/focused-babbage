@@ -552,6 +552,85 @@ export function createApp(options?: {
     }
   });
 
+  // Built-in Privacy Policy, Terms, and Data Deletion endpoints for OAuth Provider validation (Facebook / Google / Amazon)
+  app.get('/privacy', (_req, res) => {
+    res
+      .status(200)
+      .type('html')
+      .send(`<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — Family Wishlist</title>
+  <meta property="og:title" content="Privacy Policy — Family Wishlist" />
+  <meta property="og:description" content="Privacy Policy and Data Handling for our self-hosted Family Wishlist application." />
+  <meta property="og:type" content="website" />
+  <style>
+    body { background: #020617; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; max-width: 720px; margin: 0 auto; padding: 2.5rem 1.25rem; }
+    h1, h2 { color: #f8fafc; }
+    p, li { color: #cbd5e1; }
+    a { color: #60a5fa; }
+    .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 1.75rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Privacy Policy</h1>
+    <p><strong>Effective Date:</strong> November 1, 2026</p>
+    <p>Family Wishlist is a private, self-hosted family gift-registry application. We respect your privacy and collect only the minimum information required to let you create and share wishlists with family members.</p>
+    <h2>1. Information We Collect</h2>
+    <ul>
+      <li><strong>Authentication Information:</strong> When you sign in using Facebook, Google, Amazon, or local email login, we store your display name, account identifier, and (if provided) email address solely to identify your wishlist account.</li>
+      <li><strong>Wishlist &amp; Gift Data:</strong> We store the wishlist titles, items, product links, and gift reservation names that you or your family members enter.</li>
+    </ul>
+    <h2>2. How We Use Information</h2>
+    <p>Your information is used strictly to authenticate your session and display your wishlists to family members with whom you share your link. We never sell, rent, or share your data with third parties or advertisers.</p>
+    <h2>3. Data Deletion (<a href="/data-deletion">/data-deletion</a>)</h2>
+    <p>You may delete any wishlist or item at any time directly within the application after signing in, or request complete account deletion from the family server administrator.</p>
+    <p><a href="/">&larr; Back to Family Wishlist</a></p>
+  </div>
+</body>
+</html>`);
+  });
+
+  app.get(['/data-deletion', '/terms'], (_req, res) => {
+    res
+      .status(200)
+      .type('html')
+      .send(`<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>User Data Deletion &amp; Terms — Family Wishlist</title>
+  <meta property="og:title" content="User Data Deletion &amp; Terms — Family Wishlist" />
+  <meta property="og:description" content="Instructions for deleting user data from Family Wishlist." />
+  <meta property="og:type" content="website" />
+  <style>
+    body { background: #020617; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; line-height: 1.6; max-width: 720px; margin: 0 auto; padding: 2.5rem 1.25rem; }
+    h1, h2 { color: #f8fafc; }
+    p, li { color: #cbd5e1; }
+    a { color: #60a5fa; }
+    .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; padding: 1.75rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>User Data Deletion Instructions &amp; Terms of Service</h1>
+    <p>Family Wishlist is a private, self-hosted application operated for family and friends.</p>
+    <h2>How to Delete Your Data</h2>
+    <ol>
+      <li>Sign in to your account at <a href="/">Family Wishlist</a>.</li>
+      <li>Delete any individual wishlist items or entire wishlists using the <strong>Remove</strong> or <strong>Delete</strong> buttons.</li>
+      <li>To remove your OAuth login association and account record completely, revoke the app under your Facebook / Google / Amazon account&apos;s <em>Apps and Websites</em> settings and notify the family server administrator to purge your user record.</li>
+    </ol>
+    <p><a href="/privacy">View Privacy Policy</a> &middot; <a href="/">&larr; Back to Family Wishlist</a></p>
+  </div>
+</body>
+</html>`);
+  });
+
   // Static client assets & SPA fallback with OpenGraph tags for /w/:slug
   const clientDistDir = path.resolve(process.cwd(), 'dist/client');
   if (fs.existsSync(clientDistDir)) {
