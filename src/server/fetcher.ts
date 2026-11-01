@@ -105,6 +105,7 @@ export function detectStoreName(urlStr: string): string | null {
     if (host.includes('gamestop.com')) return 'GameStop';
     if (host.includes('lowes.com')) return "Lowe's";
     if (host.includes('homedepot.com')) return 'Home Depot';
+    if (host.includes('barnesandnoble.com')) return 'Barnes & Noble';
     if (host.includes('etsy.com')) return 'Etsy';
     const parts = host.replace(/^www\./, '').split('.');
     if (parts.length >= 2) {
@@ -120,12 +121,26 @@ export function detectStoreName(urlStr: string): string | null {
 function resolveUrlMaybe(candidate: string | null | undefined, baseUrl: string): string | null {
   if (!candidate || typeof candidate !== 'string') return null;
   const trimmed = candidate.trim();
-  if (!trimmed) return null;
+  if (!trimmed || trimmed.startsWith('data:')) return null;
   try {
-    return new URL(trimmed, baseUrl).toString();
+    const resolved = new URL(trimmed, baseUrl).toString();
+    // Ignore Amazon global marketing/logo sprites (/images/G/)
+    if (resolved.includes('media-amazon.com/images/G/')) return null;
+    return resolved;
   } catch {
     return null;
   }
+}
+
+function canonicalizeFetchUrl(safeUrl: URL): string {
+  const host = safeUrl.hostname.toLowerCase();
+  if (host.includes('amazon.')) {
+    const asinMatch = safeUrl.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i);
+    if (asinMatch) {
+      return `${safeUrl.protocol}//${safeUrl.host}/dp/${asinMatch[1].toUpperCase()}`;
+    }
+  }
+  return safeUrl.toString();
 }
 
 function extractSlugFallbackTitle(sourceUrl: string): string {
@@ -143,6 +158,7 @@ function extractSlugFallbackTitle(sourceUrl: string): string {
           s !== 'site' &&
           s !== 'ip' &&
           s !== 'p' &&
+          !s.toLowerCase().startsWith('ref=') &&
           !/^[A-Z0-9]{10}$/.test(s) &&
           !/^A-\d+$/.test(s) &&
           !/^\d+(\.p|\.html)?$/.test(s)
@@ -287,23 +303,46 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
   }
 
   if (!image_url) {
-    const landingImg = $('#landingImage, #imgBlkFront').first();
-    const oldHires = landingImg.attr('data-old-hires');
-    const dynamicJson = landingImg.attr('data-a-dynamic-image');
-    let dynamicUrl: string | null = null;
-    if (dynamicJson) {
-      try {
-        const parsedMap = JSON.parse(dynamicJson) as Record<string, unknown>;
-        const keys = Object.keys(parsedMap);
-        if (keys.length > 0) dynamicUrl = keys[0];
-      } catch {
-        // ignore
+    const prioritySelectors = [
+      '#landingImage',
+      '#imgBlkFront',
+      '#gc-standard-design-image',
+      '#main-image',
+      '#imgTagWrapperId img',
+    ];
+    for (const sel of prioritySelectors) {
+      const landingImg = $(sel).first();
+      if (landingImg.length === 0) continue;
+      const oldHires = landingImg.attr('data-old-hires');
+      const dynamicJson = landingImg.attr('data-a-dynamic-image');
+      let dynamicUrl: string | null = null;
+      if (dynamicJson) {
+        try {
+          const parsedMap = JSON.parse(dynamicJson) as Record<string, unknown>;
+          const keys = Object.keys(parsedMap);
+          if (keys.length > 0) dynamicUrl = keys[0];
+        } catch {
+          // ignore
+        }
+      }
+      const candidate =
+        resolveUrlMaybe(oldHires, sourceUrl) ||
+        resolveUrlMaybe(dynamicUrl, sourceUrl) ||
+        resolveUrlMaybe(landingImg.attr('src'), sourceUrl);
+      if (candidate) {
+        image_url = candidate;
+        break;
       }
     }
-    image_url =
-      resolveUrlMaybe(oldHires, sourceUrl) ||
-      resolveUrlMaybe(dynamicUrl, sourceUrl) ||
-      resolveUrlMaybe(landingImg.attr('src'), sourceUrl);
+  }
+
+  if (!image_url) {
+    const hiResMatch =
+      html.match(/"hiRes"\s*:\s*"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/) ||
+      html.match(/"large"\s*:\s*"(https:\/\/m\.media-amazon\.com\/images\/I\/[^"]+)"/);
+    if (hiResMatch) {
+      image_url = resolveUrlMaybe(hiResMatch[1], sourceUrl);
+    }
   }
 
   if (!color) {
@@ -385,30 +424,156 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
   };
 }
 
+async function fetchSafeHtml(
+  initialUrl: string,
+  fetchImpl: typeof fetch,
+  headers: Record<string, string>
+): Promise<{ ok: boolean; html: string; finalUrl: string }> {
+  let currentUrl = initialUrl;
+  let response: Response | null = null;
+
+  for (let hop = 0; hop < 5; hop++) {
+    response = await fetchImpl(currentUrl, {
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(12000),
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) break;
+      const resolvedRedirect = new URL(location, currentUrl).toString();
+      currentUrl = validateSafeExternalUrl(resolvedRedirect).toString();
+      continue;
+    }
+    break;
+  }
+
+  if (!response || !response.ok) {
+    return { ok: false, html: '', finalUrl: currentUrl };
+  }
+  return { ok: true, html: await response.text(), finalUrl: currentUrl };
+}
+
 export async function fetchProductMetadata(
   url: string,
   options?: { fetchFn?: typeof fetch }
 ): Promise<FetchedProductMetadata> {
   const safeUrl = validateSafeExternalUrl(url);
   const normalizedUrl = safeUrl.toString();
+  const targetFetchUrl = canonicalizeFetchUrl(safeUrl);
   const store_name = detectStoreName(normalizedUrl);
   const fetchImpl = options?.fetchFn || fetch;
 
   try {
-    let currentUrl = normalizedUrl;
+    const primaryHeaders: Record<string, string> =
+      store_name === 'Walmart'
+        ? {
+            'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+          }
+        : {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0',
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+          };
+
+    const primary = await fetchSafeHtml(targetFetchUrl, fetchImpl, primaryHeaders);
+
+    let result: FetchedProductMetadata = primary.ok
+      ? { ...parseProductHtml(primary.html, normalizedUrl), url: normalizedUrl }
+      : {
+          url: normalizedUrl,
+          name: extractSlugFallbackTitle(normalizedUrl),
+          price: null,
+          image_url: null,
+          color: null,
+          size: null,
+          model: null,
+          store_name,
+          partial: true,
+        };
+
+    // Fallback for Amazon bot-challenge pages: fetch lightweight link-preview view
+    if (store_name === 'Amazon' && (!result.image_url || result.partial) && !options?.fetchFn) {
+      const fallback = await fetchSafeHtml(targetFetchUrl, fetchImpl, {
+        'User-Agent': 'WhatsApp/2.24.12.78 A',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      });
+      if (fallback.ok) {
+        const fbMeta = parseProductHtml(fallback.html, normalizedUrl);
+        result = {
+          url: normalizedUrl,
+          name: (!result.partial && result.name) || fbMeta.name || result.name,
+          price: result.price || fbMeta.price,
+          image_url: result.image_url || fbMeta.image_url,
+          color: result.color || fbMeta.color,
+          size: result.size || fbMeta.size,
+          model: result.model || fbMeta.model,
+          store_name,
+          partial: !(result.name || fbMeta.name) || !(result.price || fbMeta.price || result.image_url || fbMeta.image_url),
+        };
+      }
+    }
+
+    // ISBN/EAN book cover fallback (e.g. Barnes & Noble ?ean=978...)
+    if (!result.image_url) {
+      const eanMatch =
+        safeUrl.searchParams.get('ean')?.match(/^(97[89]\d{10})$/) ||
+        normalizedUrl.match(/\b(97[89]\d{10})\b/);
+      if (eanMatch) {
+        result.image_url = `https://covers.openlibrary.org/b/isbn/${eanMatch[1]}-L.jpg?default=false`;
+      }
+    }
+
+    return result;
+  } catch (err) {
+    if (err instanceof UnsafeUrlError) {
+      throw err;
+    }
+    const eanMatch =
+      safeUrl.searchParams.get('ean')?.match(/^(97[89]\d{10})$/) ||
+      normalizedUrl.match(/\b(97[89]\d{10})\b/);
+    return {
+      url: normalizedUrl,
+      name: extractSlugFallbackTitle(normalizedUrl),
+      price: null,
+      image_url: eanMatch ? `https://covers.openlibrary.org/b/isbn/${eanMatch[1]}-L.jpg?default=false` : null,
+      color: null,
+      size: null,
+      model: null,
+      store_name,
+      partial: true,
+    };
+  }
+}
+
+export async function downloadImageBlob(
+  imageUrl: string,
+  options?: { fetchFn?: typeof fetch }
+): Promise<{ blob: Uint8Array; mimeType: string } | null> {
+  const safeUrl = validateSafeExternalUrl(imageUrl);
+  const fetchImpl = options?.fetchFn || fetch;
+
+  try {
+    let currentUrl = safeUrl.toString();
     let response: Response | null = null;
 
     for (let hop = 0; hop < 5; hop++) {
       response = await fetchImpl(currentUrl, {
         headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-          Accept:
-            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0',
+          Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         },
         redirect: 'manual',
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (response.status >= 300 && response.status < 400) {
@@ -421,36 +586,27 @@ export async function fetchProductMetadata(
       break;
     }
 
-    if (!response || !response.ok) {
-      return {
-        url: normalizedUrl,
-        name: extractSlugFallbackTitle(normalizedUrl),
-        price: null,
-        image_url: null,
-        color: null,
-        size: null,
-        model: null,
-        store_name,
-        partial: true,
-      };
+    if (!response || !response.ok) return null;
+
+    const rawCt = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (rawCt && !rawCt.startsWith('image/') && rawCt !== 'application/octet-stream') {
+      return null;
     }
 
-    const html = await response.text();
-    return parseProductHtml(html, currentUrl);
+    const buf = await response.arrayBuffer();
+    if (buf.byteLength === 0 || buf.byteLength > 5 * 1024 * 1024) {
+      return null;
+    }
+
+    const mimeType = rawCt.startsWith('image/') ? rawCt : 'image/jpeg';
+    return {
+      blob: new Uint8Array(buf),
+      mimeType,
+    };
   } catch (err) {
     if (err instanceof UnsafeUrlError) {
       throw err;
     }
-    return {
-      url: normalizedUrl,
-      name: extractSlugFallbackTitle(normalizedUrl),
-      price: null,
-      image_url: null,
-      color: null,
-      size: null,
-      model: null,
-      store_name,
-      partial: true,
-    };
+    return null;
   }
 }

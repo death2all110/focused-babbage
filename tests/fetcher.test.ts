@@ -4,6 +4,7 @@ import {
   validateSafeExternalUrl,
   normalizePrice,
   fetchProductMetadata,
+  downloadImageBlob,
 } from '../src/server/fetcher';
 
 describe('Product URL Fetcher', () => {
@@ -130,5 +131,131 @@ describe('Product URL Fetcher', () => {
           }),
       })
     ).rejects.toThrow(/Private or loopback|Localhost|not allowed/i);
+  });
+
+  it('extracts Amazon gift card and script-embedded hiRes product images', () => {
+    const giftCardHtml = `
+      <html>
+        <body>
+          <span id="productTitle">Amazon.com Gift Card in a Mini Envelope</span>
+          <div id="imgTagWrapperId">
+            <img id="gc-standard-design-image" src="https://m.media-amazon.com/images/I/gc-envelope.jpg" />
+          </div>
+        </body>
+      </html>
+    `;
+    const gcMeta = parseProductHtml(giftCardHtml, 'https://www.amazon.com/dp/B06WVJBLBQ/');
+    expect(gcMeta.image_url).toBe('https://m.media-amazon.com/images/I/gc-envelope.jpg');
+
+    const scriptImgHtml = `
+      <html>
+        <body>
+          <span id="productTitle">Govee Ambilight TV Kit</span>
+          <script>
+            var data = { 'colorImages': { 'initial': [{"hiRes":"https://m.media-amazon.com/images/I/71govee-hires._AC_SL1500_.jpg","large":"https://m.media-amazon.com/images/I/51govee.jpg"}] } };
+          </script>
+        </body>
+      </html>
+    `;
+    const scriptMeta = parseProductHtml(scriptImgHtml, 'https://www.amazon.com/dp/B0CHS2BGHY');
+    expect(scriptMeta.image_url).toBe('https://m.media-amazon.com/images/I/71govee-hires._AC_SL1500_.jpg');
+  });
+
+  it('ignores header Prime logos (/images/G/), canonicalizes dirty Amazon /ref= URLs when fetching, and never uses ref= as a fallback title', async () => {
+    const htmlWithPrimeBanner = `
+      <html>
+        <body>
+          <header>
+            <img class="a-dynamic-image" src="https://m.media-amazon.com/images/G/01/marketing/prime/2022PrimeBrand/Logos/Prime_Logo_RGB_Prime_Blue_MASTER._CB542735979_.png" />
+          </header>
+          <span id="productTitle">Goupchn 5PCS 4mm Stackable Banana to Banana Plug Test Leads</span>
+          <div id="corePriceDisplay_desktop_feature_div">
+            <span class="a-price"><span class="a-offscreen">$12.99</span></span>
+          </div>
+          <div id="imgTagWrapperId">
+            <img id="landingImage" class="a-dynamic-image" data-old-hires="https://m.media-amazon.com/images/I/71xbpzSNPIL._AC_SL1500_.jpg" src="https://m.media-amazon.com/images/I/71xbpzSNPIL._AC_SX522_.jpg" />
+          </div>
+        </body>
+      </html>
+    `;
+
+    const fetchedUrls: string[] = [];
+    const dirtyUrl = 'https://www.amazon.com/dp/B083K8LRM6/ref=sspa_dk_detail_4?psc=1';
+    const meta = await fetchProductMetadata(dirtyUrl, {
+      fetchFn: async (input) => {
+        fetchedUrls.push(String(input));
+        return new Response(htmlWithPrimeBanner, { status: 200 });
+      },
+    });
+
+    expect(fetchedUrls[0]).toBe('https://www.amazon.com/dp/B083K8LRM6');
+    expect(meta.url).toBe(dirtyUrl);
+    expect(meta.name).toBe('Goupchn 5PCS 4mm Stackable Banana to Banana Plug Test Leads');
+    expect(meta.price).toBe('$12.99');
+    expect(meta.image_url).toBe('https://m.media-amazon.com/images/I/71xbpzSNPIL._AC_SL1500_.jpg');
+
+    const blockedMeta = parseProductHtml(
+      '<html><head><title>Amazon.com</title></head><body>Robot Check</body></html>',
+      dirtyUrl
+    );
+    expect(blockedMeta.name).not.toMatch(/ref=/i);
+  });
+
+  it('uses Googlebot UA for Walmart, falls back to OpenLibrary ISBN cover for Barnes & Noble EANs, and downloads image BLOBs safely', async () => {
+    const usedUserAgents: string[] = [];
+    const wmNextData = {
+      props: {
+        pageProps: {
+          initialData: {
+            data: {
+              product: {
+                name: 'Nee Doh Candy Swirl, 1pc',
+                priceInfo: { currentPrice: { price: 29.95 } },
+                imageInfo: { thumbnailUrl: 'https://i5.walmartimages.com/seo/Nee-Doh.png' },
+                model: '20560108950',
+              },
+            },
+          },
+        },
+      },
+    };
+    const wmMeta = await fetchProductMetadata('https://www.walmart.com/ip/Nee-Doh-Candy-Swirl-1pc/20560108950', {
+      fetchFn: async (_input, init) => {
+        const ua = (init?.headers as Record<string, string>)?.['User-Agent'] || '';
+        usedUserAgents.push(ua);
+        return new Response(
+          `<html><head><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(wmNextData)}</script></head></html>`,
+          { status: 200 }
+        );
+      },
+    });
+    expect(usedUserAgents[0]).toMatch(/Googlebot/i);
+    expect(wmMeta.name).toBe('Nee Doh Candy Swirl, 1pc');
+    expect(wmMeta.price).toBe('$29.95');
+    expect(wmMeta.image_url).toBe('https://i5.walmartimages.com/seo/Nee-Doh.png');
+
+    // Barnes & Noble with ?ean=9781449476281 gets OpenLibrary ISBN cover fallback if blocked
+    const bnMeta = await fetchProductMetadata(
+      'https://www.barnesandnoble.com/w/unicorn-vs-goblins-dana-simpson/1123179889?ean=9781449476281',
+      {
+        fetchFn: async () => new Response('Access Denied', { status: 403 }),
+      }
+    );
+    expect(bnMeta.image_url).toBe('https://covers.openlibrary.org/b/isbn/9781449476281-L.jpg?default=false');
+
+    // downloadImageBlob fetches bytes + mimeType and rejects SSRF
+    const fakeJpg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+    const downloaded = await downloadImageBlob('https://i5.walmartimages.com/seo/Nee-Doh.png', {
+      fetchFn: async () =>
+        new Response(fakeJpg, {
+          status: 200,
+          headers: { 'content-type': 'image/png; charset=binary' },
+        }),
+    });
+    expect(downloaded).not.toBeNull();
+    expect(downloaded!.mimeType).toBe('image/png');
+    expect(Array.from(downloaded!.blob)).toEqual([0xff, 0xd8, 0xff, 0xd9]);
+
+    await expect(downloadImageBlob('http://127.0.0.1:8080/secret.jpg')).rejects.toThrow();
   });
 });

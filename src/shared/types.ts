@@ -22,6 +22,7 @@ export interface WishlistItem {
   id: number;
   wishlist_id: number;
   name: string;
+  section: string | null;
   url: string | null;
   price: string | null;
   image_url: string | null;

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createDatabase, type AppDatabase } from './db.js';
 import { attachUserMiddleware, createAuthRouter } from './routes/auth.js';
-import { fetchProductMetadata, UnsafeUrlError } from './fetcher.js';
+import { downloadImageBlob, fetchProductMetadata, UnsafeUrlError } from './fetcher.js';
 import { importTtgmList } from './ttgm-importer.js';
 
 function escapeHtml(str: string): string {
@@ -120,7 +120,7 @@ export function createApp(options?: {
   });
 
   // Add item to wishlist
-  app.post('/api/wishlists/:slug/items', (req, res) => {
+  app.post('/api/wishlists/:slug/items', async (req, res) => {
     if (!req.user) {
       res.status(401).json({ error: 'Authentication required.' });
       return;
@@ -134,8 +134,9 @@ export function createApp(options?: {
       res.status(403).json({ error: 'Only the wishlist owner can add items.' });
       return;
     }
-    const { name, url, price, image_url, color, size, model, priority } = req.body as {
+    const { name, section, url, price, image_url, color, size, model, priority } = req.body as {
       name?: string;
+      section?: string | null;
       url?: string | null;
       price?: string | null;
       image_url?: string | null;
@@ -148,8 +149,9 @@ export function createApp(options?: {
       res.status(400).json({ error: 'Item name is required.' });
       return;
     }
-    const item = db.addItem(existing.id, {
+    let item = db.addItem(existing.id, {
       name,
+      section,
       url,
       price,
       image_url,
@@ -158,10 +160,16 @@ export function createApp(options?: {
       model,
       priority,
     });
+    if (item.image_url && /^https?:\/\//i.test(item.image_url)) {
+      const downloaded = await downloadImageBlob(item.image_url).catch(() => null);
+      if (downloaded) {
+        item = db.setItemImageBlob(item.id, downloaded.blob, downloaded.mimeType) || item;
+      }
+    }
     res.status(201).json({ item });
   });
 
-  app.patch('/api/wishlists/:slug/items/:itemId', (req, res) => {
+  app.patch('/api/wishlists/:slug/items/:itemId', async (req, res) => {
     if (!req.user) {
       res.status(401).json({ error: 'Authentication required.' });
       return;
@@ -175,10 +183,16 @@ export function createApp(options?: {
       res.status(403).json({ error: 'Only the wishlist owner can edit items.' });
       return;
     }
-    const updated = db.updateItem(Number(req.params.itemId), existing.id, req.body);
+    let updated = db.updateItem(Number(req.params.itemId), existing.id, req.body);
     if (!updated) {
       res.status(404).json({ error: 'Item not found.' });
       return;
+    }
+    if (updated.image_url && /^https?:\/\//i.test(updated.image_url)) {
+      const downloaded = await downloadImageBlob(updated.image_url).catch(() => null);
+      if (downloaded) {
+        updated = db.setItemImageBlob(updated.id, downloaded.blob, downloaded.mimeType) || updated;
+      }
     }
     // Always strip reservation state when returning to owner
     res.json({
@@ -189,6 +203,19 @@ export function createApp(options?: {
         reserved_at: null,
       },
     });
+  });
+
+  // Serve cached item image BLOB from SQLite
+  app.get('/api/items/:itemId/image', (req, res) => {
+    const itemId = Number(req.params.itemId);
+    const cached = db.getItemImageBlob(itemId);
+    if (!cached) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader('Content-Type', cached.mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(cached.blob));
   });
 
   app.delete('/api/wishlists/:slug/items/:itemId', (req, res) => {

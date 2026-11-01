@@ -65,4 +65,25 @@ describe('AppDatabase', () => {
 
     expect(db.reserveItem(item.id, 'Sarah', owner.id).status).toBe('owner_forbidden');
   });
+
+  it('stores item section and caches binary image BLOBs in SQLite', () => {
+    const owner = db.createUser({ email: 'sarah@example.com', display_name: 'Sarah' });
+    const list = db.createWishlist(owner.id, { title: "Sarah's List" });
+    const item = db.addItem(list.id, {
+      name: 'Unicorn vs. Goblins',
+      section: 'Books',
+      price: '$12.99',
+    });
+
+    expect(item.section).toBe('Books');
+
+    const sampleBytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    const updated = db.setItemImageBlob(item.id, sampleBytes, 'image/jpeg')!;
+    expect(updated.image_url).toBe(`/api/items/${item.id}/image`);
+
+    const storedBlob = db.getItemImageBlob(item.id);
+    expect(storedBlob).toBeDefined();
+    expect(storedBlob!.mimeType).toBe('image/jpeg');
+    expect(Array.from(storedBlob!.blob)).toEqual(Array.from(sampleBytes));
+  });
 });

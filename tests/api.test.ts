@@ -59,5 +59,13 @@ describe('Wishlist API & OpenGraph', () => {
     expect(ogRes.status).toBe(200);
     expect(ogRes.text).toContain('property="og:title"');
     expect(ogRes.text).toContain("Sarah&#39;s Wishlist");
+
+    // Local SQLite BLOB image serving via GET /api/items/:itemId/image
+    const samplePng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    db.setItemImageBlob(itemId, samplePng, 'image/png');
+    const imgRes = await request(app).get(`/api/items/${itemId}/image`);
+    expect(imgRes.status).toBe(200);
+    expect(imgRes.headers['content-type']).toMatch(/image\/png/);
+    expect(new Uint8Array(imgRes.body)).toEqual(samplePng);
   });
 });

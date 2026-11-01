@@ -17,7 +17,7 @@ interface WishlistViewProps {
   data: WishlistViewResponse;
   currentUser: User | null;
   onRefresh: () => void;
-  onAddItem?: () => void;
+  onAddItem?: (defaultSection?: string) => void;
   onEditItem?: (item: WishlistItem) => void;
   onDeleteItem?: (itemId: number) => void;
   onOpenImport?: () => void;
@@ -60,6 +60,33 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
     : activeTab === 'available'
       ? availableItems
       : reservedItems;
+
+  const hasSections = visibleItems.some((item) => Boolean(item.section));
+  const groupedSections: Array<{ title: string | null; items: WishlistItem[] }> = [];
+  if (hasSections) {
+    const map = new Map<string, WishlistItem[]>();
+    const unsectioned: WishlistItem[] = [];
+    for (const item of visibleItems) {
+      if (item.section) {
+        let bucket = map.get(item.section);
+        if (!bucket) {
+          bucket = [];
+          map.set(item.section, bucket);
+        }
+        bucket.push(item);
+      } else {
+        unsectioned.push(item);
+      }
+    }
+    for (const [secTitle, secItems] of map.entries()) {
+      groupedSections.push({ title: secTitle, items: secItems });
+    }
+    if (unsectioned.length > 0) {
+      groupedSections.push({ title: 'Other Items', items: unsectioned });
+    }
+  } else {
+    groupedSections.push({ title: null, items: visibleItems });
+  }
 
   const handleCopyShareLink = async () => {
     const shareUrl = `${window.location.origin}/w/${wishlist.slug}`;
@@ -185,7 +212,7 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
 
               <button
                 type="button"
-                onClick={onAddItem}
+                onClick={() => onAddItem?.()}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
               >
                 <Plus className="w-4 h-4" />
@@ -243,12 +270,36 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {visibleItems.map((item) => (
-            <div
-              key={item.id}
-              className="rounded-xl bg-slate-900 border border-slate-800 p-4 flex flex-col sm:flex-row sm:items-center gap-4 hover:border-slate-700 transition-colors"
-            >
+        <div className="space-y-6">
+          {groupedSections.map((group) => (
+            <div key={group.title ?? '__all__'} className="space-y-3">
+              {group.title && (
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2 pt-1">
+                  <h2 className="text-sm font-bold uppercase tracking-wider text-blue-400">
+                    {group.title}
+                  </h2>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-slate-400 font-medium">
+                      {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
+                    </span>
+                    {is_owner && group.title !== 'Other Items' && (
+                      <button
+                        type="button"
+                        onClick={() => onAddItem?.(group.title!)}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-slate-800 hover:bg-slate-700 text-blue-300 border border-slate-700 transition-colors"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>Add here</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {group.items.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-xl bg-slate-900 border border-slate-800 p-4 flex flex-col sm:flex-row sm:items-center gap-4 hover:border-slate-700 transition-colors"
+                >
               {/* Product Thumbnail */}
               <div className="w-20 h-20 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0">
                 {item.image_url ? (
@@ -381,9 +432,11 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
                   </button>
                 )}
               </div>
-            </div>
-          ))}
-        </div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
       )}
     </div>
   );

@@ -1,10 +1,25 @@
 import type { AppDatabase } from './db.js';
 import type { TtgmImportSummary, WishlistItem } from '../shared/types.js';
-import { fetchProductMetadata, normalizePrice, validateSafeExternalUrl } from './fetcher.js';
+import {
+  downloadImageBlob,
+  fetchProductMetadata,
+  normalizePrice,
+  validateSafeExternalUrl,
+} from './fetcher.js';
+
+export interface TtgmRawSection {
+  key?: string;
+  name?: string;
+  sequence?: number;
+  items?: TtgmRawItem[];
+}
 
 export interface TtgmRawItem {
   key?: string;
   name: string;
+  section?: string | null;
+  section_name?: string | null;
+  sequence?: number;
   price?: string | number | null;
   url?: string | null;
   image?: string | null;
@@ -89,12 +104,47 @@ export function parseTtgmHtml(html: string): { title: string; items: TtgmRawItem
 
   const parsed = JSON.parse(match[1]) as {
     name?: string;
+    sections?: TtgmRawSection[];
     items?: TtgmRawItem[];
   };
 
+  const sectionInfo = new Map<string, { name: string; sequence: number }>();
+  if (Array.isArray(parsed.sections)) {
+    for (const sec of parsed.sections) {
+      if (sec && sec.key && sec.name?.trim()) {
+        sectionInfo.set(sec.key, {
+          name: sec.name.trim(),
+          sequence: Number(sec.sequence ?? 0),
+        });
+      }
+    }
+  }
+
+  const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+  const indexed = rawItems.map((it, idx) => {
+    const sec = it.section ? sectionInfo.get(it.section) : undefined;
+    return {
+      item: {
+        ...it,
+        section_name: sec ? sec.name : null,
+      },
+      sectionSeq: sec ? sec.sequence : Number.MAX_SAFE_INTEGER,
+      itemSeq: it.sequence !== undefined ? Number(it.sequence) : idx,
+      originalIdx: idx,
+    };
+  });
+
+  if (sectionInfo.size > 0) {
+    indexed.sort((a, b) => {
+      if (a.sectionSeq !== b.sectionSeq) return a.sectionSeq - b.sectionSeq;
+      if (a.itemSeq !== b.itemSeq) return a.itemSeq - b.itemSeq;
+      return a.originalIdx - b.originalIdx;
+    });
+  }
+
   return {
     title: parsed.name?.trim() || 'Imported Wishlist',
-    items: Array.isArray(parsed.items) ? parsed.items : [],
+    items: indexed.map((entry) => entry.item),
   };
 }
 
@@ -105,6 +155,7 @@ export async function importTtgmList(
   options?: {
     fetchHtmlFn?: (url: string) => Promise<string>;
     enrichFn?: typeof fetchProductMetadata;
+    downloadImageFn?: typeof downloadImageBlob;
   }
 ): Promise<TtgmImportSummary> {
   const targetUrl = resolveTtgmUrl(urlOrCode);
@@ -125,83 +176,165 @@ export async function importTtgmList(
     });
 
   const enrich = options?.enrichFn || fetchProductMetadata;
+  // In real runtime (when neither fetchHtmlFn nor enrichFn is mocked, or when downloadImageFn is explicitly passed), cache images as SQLite BLOBs
+  const downloadImg =
+    options?.downloadImageFn ??
+    (!options?.fetchHtmlFn && !options?.enrichFn ? downloadImageBlob : undefined);
+
   const html = await fetchHtml(targetUrl);
   const { items: rawItems } = parseTtgmHtml(html);
 
   let skipped_received_count = 0;
   let enriched_count = 0;
-  const importedOwnerSafeItems: WishlistItem[] = [];
 
+  const activeRawItems: TtgmRawItem[] = [];
   for (const raw of rawItems) {
-    // Skip items marked as received in past holidays
     if (raw.received !== null && raw.received !== undefined && String(raw.received).trim() !== '') {
       skipped_received_count++;
       continue;
     }
+    activeRawItems.push(raw);
+  }
 
-    const itemUrl = raw.url?.trim() || null;
-    let itemPrice = normalizePrice(raw.price);
-    let itemImage: string | null = null;
-    if (raw.image?.trim()) {
-      try {
-        itemImage = new URL(raw.image.trim(), targetUrl).toString();
-      } catch {
-        itemImage = null;
+  interface PreparedImportItem {
+    name: string;
+    section: string | null;
+    url: string | null;
+    price: string | null;
+    image_url: string | null;
+    cachedBlob: { blob: Uint8Array; mimeType: string } | null;
+    color: string | null;
+    size: string | null;
+    model: string | null;
+    priority: number;
+    activeReservation: boolean;
+    didEnrich: boolean;
+  }
+
+  const prepared: PreparedImportItem[] = new Array(activeRawItems.length);
+  const concurrency = 6;
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < activeRawItems.length) {
+      const idx = cursor++;
+      const raw = activeRawItems[idx];
+
+      const itemUrl = raw.url?.trim() || null;
+      let itemPrice = normalizePrice(raw.price);
+      let itemImage: string | null = null;
+      let ttgmFallbackImageUrl: string | null = null;
+
+      if (raw.image?.trim()) {
+        try {
+          const resolved = new URL(raw.image.trim(), targetUrl);
+          const imgHost = resolved.hostname.toLowerCase();
+          if (imgHost === 'thingstogetme.com' || imgHost.endsWith('.thingstogetme.com')) {
+            // Never hotlink thingstogetme.com; only use for one-time local BLOB download if store scraping fails
+            ttgmFallbackImageUrl = resolved.toString();
+          } else {
+            itemImage = resolved.toString();
+          }
+        } catch {
+          itemImage = null;
+        }
       }
-    }
-    const noteFields = cleanTtgmNote(raw.note);
-    let itemColor = noteFields.color;
-    let itemSize = noteFields.size;
-    let itemModel = noteFields.model;
 
-    // Auto-fetch missing details if the item has a URL but is missing image or price
-    if (itemUrl && (!itemImage || !itemPrice)) {
-      try {
-        const meta = await enrich(itemUrl);
-        let didEnrich = false;
-        if (!itemImage && meta.image_url) {
-          itemImage = meta.image_url;
-          didEnrich = true;
+      const noteFields = cleanTtgmNote(raw.note);
+      let itemColor = noteFields.color;
+      let itemSize = noteFields.size;
+      let itemModel = noteFields.model;
+      let didEnrich = false;
+
+      // Auto-fetch missing details if the item has a URL but is missing direct store image or price
+      if (itemUrl && (!itemImage || !itemPrice)) {
+        try {
+          const meta = await enrich(itemUrl);
+          if (!itemImage && meta.image_url) {
+            itemImage = meta.image_url;
+            didEnrich = true;
+          }
+          if (!itemPrice && meta.price) {
+            itemPrice = meta.price;
+            didEnrich = true;
+          }
+          if (!itemColor && meta.color) {
+            itemColor = meta.color;
+            didEnrich = true;
+          }
+          if (!itemSize && meta.size) {
+            itemSize = meta.size;
+            didEnrich = true;
+          }
+          if (!itemModel && meta.model) {
+            itemModel = meta.model;
+            didEnrich = true;
+          }
+        } catch {
+          // Ignore enrichment errors and keep existing item data
         }
-        if (!itemPrice && meta.price) {
-          itemPrice = meta.price;
-          didEnrich = true;
-        }
-        if (!itemColor && meta.color) {
-          itemColor = meta.color;
-          didEnrich = true;
-        }
-        if (!itemSize && meta.size) {
-          itemSize = meta.size;
-          didEnrich = true;
-        }
-        if (!itemModel && meta.model) {
-          itemModel = meta.model;
-          didEnrich = true;
-        }
-        if (didEnrich) {
-          enriched_count++;
-        }
-      } catch {
-        // Ignore enrichment errors and keep existing item data
       }
+
+      // Download image into local SQLite BLOB cache so we never hammer 3rd-party servers or hotlink TTGM
+      let cachedBlob: { blob: Uint8Array; mimeType: string } | null = null;
+      if (downloadImg) {
+        const sourceToDownload = itemImage || ttgmFallbackImageUrl;
+        if (sourceToDownload) {
+          try {
+            cachedBlob = await downloadImg(sourceToDownload);
+            if (!itemImage && cachedBlob) {
+              didEnrich = true;
+            }
+          } catch {
+            cachedBlob = null;
+          }
+        }
+      }
+
+      const activeReservation = Array.isArray(raw.item_users) && raw.item_users.length > 0;
+      const cleanName = (raw.name || 'Untitled Item').replace(/^Amazon\.com\s*:\s*/i, '').trim();
+
+      prepared[idx] = {
+        name: cleanName,
+        section: raw.section_name ?? null,
+        url: itemUrl,
+        price: itemPrice,
+        image_url: itemImage,
+        cachedBlob,
+        color: itemColor,
+        size: itemSize,
+        model: itemModel,
+        priority: Number(raw.priority ?? 0),
+        activeReservation,
+        didEnrich,
+      };
     }
+  }
 
-    const activeReservation = Array.isArray(raw.item_users) && raw.item_users.length > 0;
-    const cleanName = (raw.name || 'Untitled Item').replace(/^Amazon\.com\s*:\s*/i, '').trim();
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, activeRawItems.length) }, () => worker())
+  );
 
-    const created = db.addItem(wishlistId, {
-      name: cleanName,
-      url: itemUrl,
-      price: itemPrice,
-      image_url: itemImage,
-      color: itemColor,
-      size: itemSize,
-      model: itemModel,
-      priority: Number(raw.priority ?? 0),
-      is_reserved: activeReservation,
-      reserved_by_name: activeReservation ? 'Reserved (Imported)' : null,
+  const importedOwnerSafeItems: WishlistItem[] = [];
+  for (const p of prepared) {
+    if (p.didEnrich) enriched_count++;
+    let created = db.addItem(wishlistId, {
+      name: p.name,
+      section: p.section,
+      url: p.url,
+      price: p.price,
+      image_url: p.image_url,
+      color: p.color,
+      size: p.size,
+      model: p.model,
+      priority: p.priority,
+      is_reserved: p.activeReservation,
+      reserved_by_name: p.activeReservation ? 'Reserved (Imported)' : null,
     });
+
+    if (p.cachedBlob) {
+      created = db.setItemImageBlob(created.id, p.cachedBlob.blob, p.cachedBlob.mimeType) || created;
+    }
 
     // Strip reservation state from the returned summary so the list owner never gets spoiled
     importedOwnerSafeItems.push({

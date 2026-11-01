@@ -49,6 +49,7 @@ export const App: React.FC = () => {
 
   const [showItemModal, setShowItemModal] = useState(false);
   const [editingItem, setEditingItem] = useState<WishlistItem | null>(null);
+  const [defaultSection, setDefaultSection] = useState<string | null>(null);
   const [prefillQuery, setPrefillQuery] = useState<Partial<FetchedProductMetadata> | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showNewListModal, setShowNewListModal] = useState(false);
@@ -314,13 +315,15 @@ export const App: React.FC = () => {
             onRefresh={() => {
               if (activeSlug) void loadWishlist(activeSlug);
             }}
-            onAddItem={() => {
+            onAddItem={(sec) => {
               setEditingItem(null);
+              setDefaultSection(sec ?? null);
               setPrefillQuery(null);
               setShowItemModal(true);
             }}
             onEditItem={(item) => {
               setEditingItem(item);
+              setDefaultSection(null);
               setPrefillQuery(null);
               setShowItemModal(true);
             }}
@@ -397,9 +400,18 @@ export const App: React.FC = () => {
           wishlistSlug={activeSlug}
           initialItem={editingItem}
           prefillFromQuery={prefillQuery}
+          defaultSection={defaultSection}
+          existingSections={Array.from(
+            new Set(
+              (activeView?.items || [])
+                .map((i) => i.section)
+                .filter((s): s is string => Boolean(s))
+            )
+          )}
           onClose={() => {
             setShowItemModal(false);
             setEditingItem(null);
+            setDefaultSection(null);
             setPrefillQuery(null);
           }}
           onSaved={() => {

@@ -6,6 +6,8 @@ interface ItemFormModalProps {
   wishlistSlug: string;
   initialItem?: WishlistItem | null;
   prefillFromQuery?: Partial<FetchedProductMetadata> | null;
+  existingSections?: string[];
+  defaultSection?: string | null;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -17,11 +19,20 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
   wishlistSlug,
   initialItem,
   prefillFromQuery,
+  existingSections = [],
+  defaultSection = null,
   onClose,
   onSaved,
 }) => {
+  const initialSec = initialItem?.section ?? defaultSection ?? '';
+  const isInitialCustom = Boolean(initialSec && !existingSections.includes(initialSec));
+
   const [url, setUrl] = useState(initialItem?.url ?? prefillFromQuery?.url ?? '');
   const [name, setName] = useState(initialItem?.name ?? prefillFromQuery?.name ?? '');
+  const [selectedSection, setSelectedSection] = useState<string>(
+    isInitialCustom ? '__new__' : initialSec
+  );
+  const [newSectionName, setNewSectionName] = useState<string>(isInitialCustom ? initialSec : '');
   const [price, setPrice] = useState(initialItem?.price ?? prefillFromQuery?.price ?? '');
   const [imageUrl, setImageUrl] = useState(
     initialItem?.image_url ?? prefillFromQuery?.image_url ?? ''
@@ -88,11 +99,15 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
         : `/api/wishlists/${wishlistSlug}/items`;
       const method = initialItem ? 'PATCH' : 'POST';
 
+      const finalSection =
+        selectedSection === '__new__' ? newSectionName.trim() : selectedSection.trim();
+
       const res = await fetch(endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: name.trim(),
+          section: finalSection || null,
           url: url.trim() || null,
           price: price.trim() || null,
           image_url: imageUrl.trim() || null,
@@ -193,6 +208,42 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
                 placeholder="$49.99"
                 className={INPUT_CLASS}
               />
+            </div>
+          </div>
+
+          <div>
+            <label
+              htmlFor="item-section-select"
+              className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1"
+            >
+              Section / Category
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select
+                id="item-section-select"
+                value={selectedSection}
+                onChange={(e) => setSelectedSection(e.target.value)}
+                className={INPUT_CLASS}
+              >
+                <option value="">No Section (General)</option>
+                {existingSections.map((sec) => (
+                  <option key={sec} value={sec}>
+                    {sec}
+                  </option>
+                ))}
+                <option value="__new__">+ Create New Section...</option>
+              </select>
+
+              {selectedSection === '__new__' && (
+                <input
+                  type="text"
+                  value={newSectionName}
+                  onChange={(e) => setNewSectionName(e.target.value)}
+                  placeholder="Enter new section name..."
+                  className={INPUT_CLASS}
+                  autoFocus
+                />
+              )}
             </div>
           </div>
 

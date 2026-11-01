@@ -41,6 +41,7 @@ export interface AppDatabase {
     wishlistId: number,
     input: {
       name: string;
+      section?: string | null;
       url?: string | null;
       price?: string | null;
       image_url?: string | null;
@@ -52,6 +53,8 @@ export interface AppDatabase {
       reserved_by_name?: string | null;
     }
   ): WishlistItem;
+  setItemImageBlob(itemId: number, blob: Uint8Array, mimeType: string): WishlistItem | undefined;
+  getItemImageBlob(itemId: number): { blob: Uint8Array; mimeType: string } | undefined;
   updateItem(
     itemId: number,
     wishlistId: number,
@@ -112,6 +115,7 @@ function mapItemRow(row: Record<string, unknown>, hideReservation = false): Wish
     id: Number(row.id),
     wishlist_id: Number(row.wishlist_id),
     name: String(row.name),
+    section: row.section != null && String(row.section).trim() !== '' ? String(row.section) : null,
     url: row.url != null ? String(row.url) : null,
     price: row.price != null ? String(row.price) : null,
     image_url: row.image_url != null ? String(row.image_url) : null,
@@ -173,9 +177,12 @@ export function createDatabase(dbPath?: string): AppDatabase {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       wishlist_id INTEGER NOT NULL REFERENCES wishlists(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
+      section TEXT,
       url TEXT,
       price TEXT,
       image_url TEXT,
+      image_blob BLOB,
+      image_mime TEXT,
       color TEXT,
       size TEXT,
       model TEXT,
@@ -187,6 +194,19 @@ export function createDatabase(dbPath?: string): AppDatabase {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  const existingCols = new Set(
+    (sqlite.prepare('PRAGMA table_info(wishlist_items)').all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  if (!existingCols.has('section')) {
+    sqlite.exec('ALTER TABLE wishlist_items ADD COLUMN section TEXT;');
+  }
+  if (!existingCols.has('image_blob')) {
+    sqlite.exec('ALTER TABLE wishlist_items ADD COLUMN image_blob BLOB;');
+  }
+  if (!existingCols.has('image_mime')) {
+    sqlite.exec('ALTER TABLE wishlist_items ADD COLUMN image_mime TEXT;');
+  }
 
   const db: AppDatabase = {
     createUser(input) {
@@ -347,17 +367,19 @@ export function createDatabase(dbPath?: string): AppDatabase {
       const isReserved = input.is_reserved ? 1 : 0;
       const reservedByName = isReserved ? (input.reserved_by_name?.trim() || 'Reserved') : null;
       const reservedAt = isReserved ? new Date().toISOString() : null;
+      const sectionVal = input.section?.trim() || null;
 
       const res = sqlite
         .prepare(`
           INSERT INTO wishlist_items (
-            wishlist_id, name, url, price, image_url, color, size, model, priority,
+            wishlist_id, name, section, url, price, image_url, color, size, model, priority,
             is_reserved, reserved_by_name, reserved_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           wishlistId,
           input.name.trim(),
+          sectionVal,
           input.url ?? null,
           input.price ?? null,
           input.image_url ?? null,
@@ -376,6 +398,38 @@ export function createDatabase(dbPath?: string): AppDatabase {
       return mapItemRow(row, false);
     },
 
+    setItemImageBlob(itemId, blob, mimeType) {
+      const existing = sqlite
+        .prepare('SELECT id FROM wishlist_items WHERE id = ?')
+        .get(itemId) as Record<string, unknown> | undefined;
+      if (!existing) return undefined;
+
+      const localUrl = `/api/items/${itemId}/image`;
+      sqlite
+        .prepare(`
+          UPDATE wishlist_items
+          SET image_blob = ?, image_mime = ?, image_url = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `)
+        .run(blob, mimeType, localUrl, itemId);
+
+      const updated = sqlite
+        .prepare('SELECT * FROM wishlist_items WHERE id = ?')
+        .get(itemId) as Record<string, unknown>;
+      return mapItemRow(updated, false);
+    },
+
+    getItemImageBlob(itemId) {
+      const row = sqlite
+        .prepare('SELECT image_blob, image_mime FROM wishlist_items WHERE id = ?')
+        .get(itemId) as { image_blob?: Uint8Array | null; image_mime?: string | null } | undefined;
+      if (!row || !row.image_blob) return undefined;
+      return {
+        blob: new Uint8Array(row.image_blob),
+        mimeType: row.image_mime || 'image/jpeg',
+      };
+    },
+
     updateItem(itemId, wishlistId, input) {
       const existing = sqlite
         .prepare('SELECT * FROM wishlist_items WHERE id = ? AND wishlist_id = ?')
@@ -383,14 +437,17 @@ export function createDatabase(dbPath?: string): AppDatabase {
       if (!existing) return undefined;
 
       const current = mapItemRow(existing, false);
+      const nextSection =
+        input.section !== undefined ? (input.section?.trim() || null) : current.section;
       sqlite
         .prepare(`
           UPDATE wishlist_items
-          SET name = ?, url = ?, price = ?, image_url = ?, color = ?, size = ?, model = ?, priority = ?, updated_at = datetime('now')
+          SET name = ?, section = ?, url = ?, price = ?, image_url = ?, color = ?, size = ?, model = ?, priority = ?, updated_at = datetime('now')
           WHERE id = ? AND wishlist_id = ?
         `)
         .run(
           input.name !== undefined ? input.name.trim() : current.name,
+          nextSection,
           input.url !== undefined ? input.url : current.url,
           input.price !== undefined ? input.price : current.price,
           input.image_url !== undefined ? input.image_url : current.image_url,
