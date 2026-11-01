@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import dns from 'node:dns';
 import net from 'node:net';
 import type { FetchedProductMetadata } from '../shared/types.js';
 
@@ -9,15 +10,28 @@ export class UnsafeUrlError extends Error {
   }
 }
 
-function isPrivateIp(ip: string): boolean {
-  const lower = ip.toLowerCase();
+export const ALLOWED_RASTER_IMAGE_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+]);
+
+const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export function isPrivateIp(ip: string): boolean {
+  const lower = ip.toLowerCase().replace(/^\[|\]$/g, '');
   if (
     lower === '::' ||
     lower === '::1' ||
     lower === '0.0.0.0' ||
     lower.startsWith('fe80:') ||
     lower.startsWith('fc') ||
-    lower.startsWith('fd')
+    lower.startsWith('fd') ||
+    lower.startsWith('ff') ||
+    lower.startsWith('2001:db8:')
   ) {
     return true;
   }
@@ -39,17 +53,26 @@ function isPrivateIp(ip: string): boolean {
   }
 
   const parts = lower.split('.').map(Number);
-  if (parts.length === 4 && parts.every((n) => !Number.isNaN(n))) {
-    const [a, b] = parts;
+  if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+    const [a, b, c] = parts;
     if (a === 10 || a === 127 || a === 0) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT / Tailscale 100.64.0.0/10
+    if (a === 169 && b === 254) return true; // Link-local / Cloud Metadata
     if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true; // Benchmark 198.18.0.0/15
+    if (a === 198 && b === 51 && c === 100) return true;
+    if (a === 203 && b === 0 && c === 113) return true;
+    if (a >= 224) return true; // Multicast & Reserved
   }
   return false;
 }
 
 export function validateSafeExternalUrl(rawUrl: string): URL {
+  if (typeof rawUrl !== 'string' || rawUrl.length > 2048) {
+    throw new UnsafeUrlError('Invalid URL format.');
+  }
   let parsed: URL;
   try {
     parsed = new URL(rawUrl.trim());
@@ -66,9 +89,16 @@ export function validateSafeExternalUrl(rawUrl: string): URL {
     host === 'localhost' ||
     host.endsWith('.localhost') ||
     host.endsWith('.local') ||
-    host.endsWith('.internal')
+    host.endsWith('.internal') ||
+    host === 'localtest.me' ||
+    host.endsWith('.localtest.me') ||
+    host === 'lvh.me' ||
+    host.endsWith('.lvh.me') ||
+    host.endsWith('.nip.io') ||
+    host.endsWith('.sslip.io') ||
+    host.endsWith('.xip.io')
   ) {
-    throw new UnsafeUrlError('Localhost and internal hostnames are not allowed.');
+    throw new UnsafeUrlError('Localhost, internal, and wildcard rebinding hostnames are not allowed.');
   }
 
   if (net.isIP(host) && isPrivateIp(host)) {
@@ -76,6 +106,97 @@ export function validateSafeExternalUrl(rawUrl: string): URL {
   }
 
   return parsed;
+}
+
+export async function assertSafeResolvedHostname(
+  hostname: string,
+  lookupFn: (host: string) => Promise<Array<{ address: string; family: number }>> = (h) =>
+    dns.promises.lookup(h, { all: true })
+): Promise<void> {
+  const cleanHost = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (net.isIP(cleanHost)) {
+    if (isPrivateIp(cleanHost)) {
+      throw new UnsafeUrlError('Private or loopback IP addresses are not allowed.');
+    }
+    return;
+  }
+
+  const records = await lookupFn(cleanHost);
+  if (!records || records.length === 0) {
+    throw new UnsafeUrlError('Could not resolve hostname.');
+  }
+  for (const rec of records) {
+    if (isPrivateIp(rec.address)) {
+      throw new UnsafeUrlError('Hostname resolves to a private or reserved IP address.');
+    }
+  }
+}
+
+export function sanitizeHttpUrl(rawUrl: unknown): string | null {
+  if (rawUrl === null || rawUrl === undefined) return null;
+  if (typeof rawUrl !== 'string') {
+    throw new UnsafeUrlError('URL must be a string.');
+  }
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 2048) {
+    throw new UnsafeUrlError('URL exceeds maximum length.');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new UnsafeUrlError('Invalid URL format.');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new UnsafeUrlError('Only http and https URLs are allowed.');
+  }
+  return parsed.toString();
+}
+
+export async function readResponseBytesWithLimit(
+  response: Response,
+  maxBytes: number
+): Promise<Uint8Array | null> {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    return null;
+  }
+
+  if (!response.body) {
+    const ab = await response.arrayBuffer();
+    if (ab.byteLength > maxBytes) return null;
+    return new Uint8Array(ab);
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          return null;
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
 
 export function normalizePrice(rawPrice: string | number | null | undefined): string | null {
@@ -123,10 +244,12 @@ function resolveUrlMaybe(candidate: string | null | undefined, baseUrl: string):
   const trimmed = candidate.trim();
   if (!trimmed || trimmed.startsWith('data:')) return null;
   try {
-    const resolved = new URL(trimmed, baseUrl).toString();
+    const resolved = new URL(trimmed, baseUrl);
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
+    const str = resolved.toString();
     // Ignore Amazon global marketing/logo sprites (/images/G/)
-    if (resolved.includes('media-amazon.com/images/G/')) return null;
-    return resolved;
+    if (str.includes('media-amazon.com/images/G/')) return null;
+    return str;
   } catch {
     return null;
   }
@@ -427,12 +550,18 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
 async function fetchSafeHtml(
   initialUrl: string,
   fetchImpl: typeof fetch,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  checkLiveDns: boolean
 ): Promise<{ ok: boolean; html: string; finalUrl: string }> {
   let currentUrl = initialUrl;
   let response: Response | null = null;
 
   for (let hop = 0; hop < 5; hop++) {
+    const parsedHop = validateSafeExternalUrl(currentUrl);
+    if (checkLiveDns) {
+      await assertSafeResolvedHostname(parsedHop.hostname);
+    }
+
     response = await fetchImpl(currentUrl, {
       headers,
       redirect: 'manual',
@@ -452,7 +581,11 @@ async function fetchSafeHtml(
   if (!response || !response.ok) {
     return { ok: false, html: '', finalUrl: currentUrl };
   }
-  return { ok: true, html: await response.text(), finalUrl: currentUrl };
+  const bytes = await readResponseBytesWithLimit(response, MAX_HTML_BYTES);
+  if (!bytes) {
+    return { ok: false, html: '', finalUrl: currentUrl };
+  }
+  return { ok: true, html: new TextDecoder().decode(bytes), finalUrl: currentUrl };
 }
 
 export async function fetchProductMetadata(
@@ -464,6 +597,7 @@ export async function fetchProductMetadata(
   const targetFetchUrl = canonicalizeFetchUrl(safeUrl);
   const store_name = detectStoreName(normalizedUrl);
   const fetchImpl = options?.fetchFn || fetch;
+  const checkLiveDns = !options?.fetchFn;
 
   try {
     const primaryHeaders: Record<string, string> =
@@ -484,7 +618,7 @@ export async function fetchProductMetadata(
             'Sec-Fetch-User': '?1',
           };
 
-    const primary = await fetchSafeHtml(targetFetchUrl, fetchImpl, primaryHeaders);
+    const primary = await fetchSafeHtml(targetFetchUrl, fetchImpl, primaryHeaders, checkLiveDns);
 
     let result: FetchedProductMetadata = primary.ok
       ? { ...parseProductHtml(primary.html, normalizedUrl), url: normalizedUrl }
@@ -502,11 +636,16 @@ export async function fetchProductMetadata(
 
     // Fallback for Amazon bot-challenge pages: fetch lightweight link-preview view
     if (store_name === 'Amazon' && (!result.image_url || result.partial) && !options?.fetchFn) {
-      const fallback = await fetchSafeHtml(targetFetchUrl, fetchImpl, {
-        'User-Agent': 'WhatsApp/2.24.12.78 A',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      });
+      const fallback = await fetchSafeHtml(
+        targetFetchUrl,
+        fetchImpl,
+        {
+          'User-Agent': 'WhatsApp/2.24.12.78 A',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+        checkLiveDns
+      );
       if (fallback.ok) {
         const fbMeta = parseProductHtml(fallback.html, normalizedUrl);
         result = {
@@ -555,22 +694,66 @@ export async function fetchProductMetadata(
   }
 }
 
+function sniffRasterImageMime(bytes: Uint8Array): string | null {
+  if (bytes.byteLength < 4) return null;
+  // Reject anything starting with whitespace + '<' (SVG / HTML / XML)
+  for (let i = 0; i < Math.min(bytes.byteLength, 32); i++) {
+    const b = bytes[i];
+    if (b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d) continue;
+    if (b === 0x3c) return null; // '<'
+    break;
+  }
+  // JPEG: FF D8 FF
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  // PNG: 89 50 4E 47
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return 'image/png';
+  }
+  // GIF: 47 49 46 38
+  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+    return 'image/gif';
+  }
+  // WEBP: RIFF....WEBP
+  if (
+    bytes.byteLength >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
 export async function downloadImageBlob(
   imageUrl: string,
   options?: { fetchFn?: typeof fetch }
 ): Promise<{ blob: Uint8Array; mimeType: string } | null> {
   const safeUrl = validateSafeExternalUrl(imageUrl);
   const fetchImpl = options?.fetchFn || fetch;
+  const checkLiveDns = !options?.fetchFn;
 
   try {
     let currentUrl = safeUrl.toString();
     let response: Response | null = null;
 
     for (let hop = 0; hop < 5; hop++) {
+      const parsedHop = validateSafeExternalUrl(currentUrl);
+      if (checkLiveDns) {
+        await assertSafeResolvedHostname(parsedHop.hostname);
+      }
+
       response = await fetchImpl(currentUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0',
-          Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          Accept: 'image/avif,image/webp,image/apng,image/png,image/jpeg,image/gif,*/*;q=0.5',
         },
         redirect: 'manual',
         signal: AbortSignal.timeout(8000),
@@ -588,20 +771,41 @@ export async function downloadImageBlob(
 
     if (!response || !response.ok) return null;
 
-    const rawCt = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (rawCt && !rawCt.startsWith('image/') && rawCt !== 'application/octet-stream') {
+    let rawCt = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (rawCt === 'image/jpg') rawCt = 'image/jpeg';
+
+    // Explicitly block SVG and non-raster types
+    if (
+      rawCt &&
+      !ALLOWED_RASTER_IMAGE_MIMES.has(rawCt) &&
+      rawCt !== 'application/octet-stream'
+    ) {
       return null;
     }
 
-    const buf = await response.arrayBuffer();
-    if (buf.byteLength === 0 || buf.byteLength > 5 * 1024 * 1024) {
+    const bytes = await readResponseBytesWithLimit(response, MAX_IMAGE_BYTES);
+    if (!bytes || bytes.byteLength === 0) {
       return null;
     }
 
-    const mimeType = rawCt.startsWith('image/') ? rawCt : 'image/jpeg';
+    // Reject any XML/HTML/SVG payload disguised with a raster or octet-stream Content-Type
+    const sniffed = sniffRasterImageMime(bytes);
+    if (rawCt === 'application/octet-stream' || !rawCt) {
+      if (!sniffed) return null;
+      return { blob: bytes, mimeType: sniffed };
+    }
+
+    // Even when Content-Type is in ALLOWED_RASTER_IMAGE_MIMES, block buffers starting with '<'
+    for (let i = 0; i < Math.min(bytes.byteLength, 32); i++) {
+      const b = bytes[i];
+      if (b === 0x20 || b === 0x09 || b === 0x0a || b === 0x0d) continue;
+      if (b === 0x3c) return null;
+      break;
+    }
+
     return {
-      blob: new Uint8Array(buf),
-      mimeType,
+      blob: bytes,
+      mimeType: rawCt,
     };
   } catch (err) {
     if (err instanceof UnsafeUrlError) {

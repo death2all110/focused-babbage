@@ -1,11 +1,17 @@
 import type { AppDatabase } from './db.js';
 import type { TtgmImportSummary, WishlistItem } from '../shared/types.js';
 import {
+  assertSafeResolvedHostname,
   downloadImageBlob,
   fetchProductMetadata,
   normalizePrice,
+  readResponseBytesWithLimit,
+  sanitizeHttpUrl,
   validateSafeExternalUrl,
 } from './fetcher.js';
+
+const MAX_TTGM_HTML_BYTES = 5 * 1024 * 1024;
+const MAX_TTGM_IMPORT_ITEMS = 250;
 
 export interface TtgmRawSection {
   key?: string;
@@ -87,7 +93,8 @@ export function resolveTtgmUrl(urlOrCode: string): string {
     return `https://www.thingstogetme.com/${trimmed}`;
   }
   const parsed = validateSafeExternalUrl(trimmed);
-  if (!parsed.hostname.toLowerCase().endsWith('thingstogetme.com')) {
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'thingstogetme.com' && !host.endsWith('.thingstogetme.com')) {
     throw new Error('Only thingstogetme.com URLs or list codes are supported.');
   }
   return parsed.toString();
@@ -162,17 +169,39 @@ export async function importTtgmList(
   const fetchHtml =
     options?.fetchHtmlFn ||
     (async (u: string) => {
-      const res = await fetch(u, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
-        },
-        signal: AbortSignal.timeout(12000),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to fetch Things To Get Me list (HTTP ${res.status})`);
+      let currentUrl = resolveTtgmUrl(u);
+      let res: Response | null = null;
+
+      for (let hop = 0; hop < 3; hop++) {
+        const parsedHop = new URL(currentUrl);
+        await assertSafeResolvedHostname(parsedHop.hostname);
+
+        res = await fetch(currentUrl, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+          },
+          redirect: 'manual',
+          signal: AbortSignal.timeout(12000),
+        });
+
+        if (res.status >= 300 && res.status < 400) {
+          const loc = res.headers.get('location');
+          if (!loc) break;
+          currentUrl = resolveTtgmUrl(new URL(loc, currentUrl).toString());
+          continue;
+        }
+        break;
       }
-      return res.text();
+
+      if (!res || !res.ok) {
+        throw new Error(`Failed to fetch Things To Get Me list (HTTP ${res?.status ?? 0})`);
+      }
+      const bytes = await readResponseBytesWithLimit(res, MAX_TTGM_HTML_BYTES);
+      if (!bytes) {
+        throw new Error('Things To Get Me list response exceeded maximum size limit.');
+      }
+      return new TextDecoder().decode(bytes);
     });
 
   const enrich = options?.enrichFn || fetchProductMetadata;
@@ -193,7 +222,9 @@ export async function importTtgmList(
       skipped_received_count++;
       continue;
     }
-    activeRawItems.push(raw);
+    if (activeRawItems.length < MAX_TTGM_IMPORT_ITEMS) {
+      activeRawItems.push(raw);
+    }
   }
 
   interface PreparedImportItem {
@@ -220,7 +251,14 @@ export async function importTtgmList(
       const idx = cursor++;
       const raw = activeRawItems[idx];
 
-      const itemUrl = raw.url?.trim() || null;
+      let itemUrl: string | null = null;
+      if (raw.url?.trim()) {
+        try {
+          itemUrl = sanitizeHttpUrl(raw.url.trim());
+        } catch {
+          itemUrl = null;
+        }
+      }
       let itemPrice = normalizePrice(raw.price);
       let itemImage: string | null = null;
       let ttgmFallbackImageUrl: string | null = null;
@@ -228,12 +266,14 @@ export async function importTtgmList(
       if (raw.image?.trim()) {
         try {
           const resolved = new URL(raw.image.trim(), targetUrl);
-          const imgHost = resolved.hostname.toLowerCase();
-          if (imgHost === 'thingstogetme.com' || imgHost.endsWith('.thingstogetme.com')) {
-            // Never hotlink thingstogetme.com; only use for one-time local BLOB download if store scraping fails
-            ttgmFallbackImageUrl = resolved.toString();
-          } else {
-            itemImage = resolved.toString();
+          if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+            const imgHost = resolved.hostname.toLowerCase();
+            if (imgHost === 'thingstogetme.com' || imgHost.endsWith('.thingstogetme.com')) {
+              // Never hotlink thingstogetme.com; only use for one-time local BLOB download if store scraping fails
+              ttgmFallbackImageUrl = resolved.toString();
+            } else {
+              itemImage = resolved.toString();
+            }
           }
         } catch {
           itemImage = null;
@@ -292,18 +332,21 @@ export async function importTtgmList(
       }
 
       const activeReservation = Array.isArray(raw.item_users) && raw.item_users.length > 0;
-      const cleanName = (raw.name || 'Untitled Item').replace(/^Amazon\.com\s*:\s*/i, '').trim();
+      const cleanName = (raw.name || 'Untitled Item')
+        .replace(/^Amazon\.com\s*:\s*/i, '')
+        .trim()
+        .slice(0, 300);
 
       prepared[idx] = {
         name: cleanName,
-        section: raw.section_name ?? null,
+        section: raw.section_name ? raw.section_name.slice(0, 100) : null,
         url: itemUrl,
         price: itemPrice,
         image_url: itemImage,
         cachedBlob,
-        color: itemColor,
-        size: itemSize,
-        model: itemModel,
+        color: itemColor ? itemColor.slice(0, 100) : null,
+        size: itemSize ? itemSize.slice(0, 100) : null,
+        model: itemModel ? itemModel.slice(0, 500) : null,
         priority: Number(raw.priority ?? 0),
         activeReservation,
         didEnrich,

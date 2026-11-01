@@ -11,7 +11,7 @@
   <Config Name="WebUI Port" Target="3000" Default="3000" Mode="tcp" Description="HTTP port for Family Wishlist" Type="Port" Display="always" Required="true" Mask="false">3000</Config>
   <Config Name="App Data (/data)" Target="/data" Default="/mnt/user/appdata/family-wishlist" Mode="rw" Description="Persistent SQLite database storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/family-wishlist</Config>
   <Config Name="APP_URL" Target="APP_URL" Default="http://localhost:3000" Mode="" Description="Public/LAN base URL used for OAuth callbacks" Type="Variable" Display="always" Required="true" Mask="false">http://localhost:3000</Config>
-  <Config Name="SESSION_SECRET" Target="SESSION_SECRET" Default="change-me-on-unraid" Mode="" Description="Secret used to sign session cookies" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="SESSION_SECRET" Target="SESSION_SECRET" Default="" Mode="" Description="Secret used to sign session cookies (leave blank to auto-generate and persist in /data/.session_secret)" Type="Variable" Display="always" Required="false" Mask="true"/>
   <Config Name="GOOGLE_CLIENT_ID" Target="GOOGLE_CLIENT_ID" Default="" Mode="" Description="Google OAuth Client ID (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>
   <Config Name="GOOGLE_CLIENT_SECRET" Target="GOOGLE_CLIENT_SECRET" Default="" Mode="" Description="Google OAuth Client Secret (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
   <Config Name="FACEBOOK_CLIENT_ID" Target="FACEBOOK_CLIENT_ID" Default="" Mode="" Description="Facebook OAuth App ID (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>

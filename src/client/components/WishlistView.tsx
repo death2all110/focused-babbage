@@ -138,6 +138,8 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
     try {
       const res = await fetch(`/api/items/${itemId}/unreserve`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
       });
       const body = (await res.json()) as { error?: string };
       if (!res.ok) {
@@ -343,7 +345,7 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
                       {item.model}
                     </span>
                   )}
-                  {item.url && (
+                  {item.url && /^https?:\/\//i.test(item.url) && (
                     <a
                       href={item.url}
                       target="_blank"

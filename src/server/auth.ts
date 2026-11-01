@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
 export type OAuthProvider = 'google' | 'facebook' | 'amazon';
 
@@ -17,29 +19,84 @@ export type OAuthExchangeFn = (
   env?: NodeJS.ProcessEnv
 ) => Promise<OAuthUserProfile>;
 
+const INSECURE_PLACEHOLDER_SECRETS = new Set([
+  '',
+  'dev-wishlist-secret',
+  'change-me-in-production',
+  'change-me-on-unraid',
+]);
+
+let runtimeFallbackSecret: string | null = null;
+
+export function resolveSessionSecret(
+  explicitSecret?: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const candidate = (explicitSecret ?? env.SESSION_SECRET ?? '').trim();
+  if (candidate && !INSECURE_PLACEHOLDER_SECRETS.has(candidate)) {
+    return candidate;
+  }
+
+  const dataDir = env.DATA_DIR;
+  if (dataDir) {
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      const secretFile = path.join(dataDir, '.session_secret');
+      if (fs.existsSync(secretFile)) {
+        const stored = fs.readFileSync(secretFile, 'utf8').trim();
+        if (stored.length >= 32) {
+          return stored;
+        }
+      }
+      const generated = crypto.randomBytes(32).toString('hex');
+      fs.writeFileSync(secretFile, generated, { mode: 0o600 });
+      return generated;
+    } catch {
+      // Fall back to in-memory random secret if filesystem is read-only
+    }
+  }
+
+  if (!runtimeFallbackSecret) {
+    runtimeFallbackSecret = crypto.randomBytes(32).toString('hex');
+  }
+  return runtimeFallbackSecret;
+}
+
 export function hashPassword(password: string): string {
+  const bounded = password.slice(0, 256);
   const salt = crypto.randomBytes(16).toString('hex');
-  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  const derived = crypto.scryptSync(bounded, salt, 64).toString('hex');
   return `${salt}:${derived}`;
 }
 
 export function verifyPassword(password: string, storedHash: string): boolean {
   const [salt, key] = storedHash.split(':');
   if (!salt || !key) return false;
-  const derived = crypto.scryptSync(password, salt, 64);
+  const bounded = password.slice(0, 256);
+  const derived = crypto.scryptSync(bounded, salt, 64);
   const keyBuf = Buffer.from(key, 'hex');
   if (derived.length !== keyBuf.length) return false;
   return crypto.timingSafeEqual(derived, keyBuf);
 }
 
-export function signSessionToken(userId: number, secret: string): string {
-  const payload = `${userId}.${Date.now()}`;
+export function signSessionToken(
+  userId: number,
+  secret: string,
+  issuedAtMs: number = Date.now()
+): string {
+  const payload = `${userId}.${issuedAtMs}`;
   const sig = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
 
-export function verifySessionToken(token: string | undefined, secret: string): number | null {
-  if (!token) return null;
+const DEFAULT_SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 60; // 60 days
+
+export function verifySessionToken(
+  token: string | undefined,
+  secret: string,
+  maxAgeMs: number = DEFAULT_SESSION_MAX_AGE_MS
+): number | null {
+  if (!token || typeof token !== 'string') return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const [userIdStr, timestampStr, sig] = parts;
@@ -50,6 +107,16 @@ export function verifySessionToken(token: string | undefined, secret: string): n
   if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
     return null;
   }
+
+  const issuedAt = Number(timestampStr);
+  const now = Date.now();
+  if (!Number.isFinite(issuedAt) || issuedAt <= 0) {
+    return null;
+  }
+  if (now - issuedAt > maxAgeMs || issuedAt > now + 60_000) {
+    return null;
+  }
+
   const userId = Number(userIdStr);
   return Number.isInteger(userId) && userId > 0 ? userId : null;
 }
@@ -135,9 +202,13 @@ export const defaultOAuthExchange: OAuthExchangeFn = async (
     const profile = (await profileRes.json()) as {
       sub: string;
       email: string;
+      email_verified?: boolean;
       name?: string;
       picture?: string;
     };
+    if (profile.email_verified === false) {
+      throw new Error('Google account email is not verified');
+    }
     return {
       provider: 'google',
       provider_account_id: profile.sub,

@@ -187,7 +187,11 @@ export const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
     setCurrentUser(null);
     setMyWishlists([]);
     await loadInitialState();
@@ -585,9 +589,10 @@ export const App: React.FC = () => {
                   <input
                     type="password"
                     required
+                    minLength={authMode === 'register' ? 8 : undefined}
                     value={authPassword}
                     onChange={(e) => setAuthPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder={authMode === 'register' ? '8+ characters' : '••••••••'}
                     className={INPUT_CLASS}
                   />
                 </div>

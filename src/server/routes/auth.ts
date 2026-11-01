@@ -7,6 +7,7 @@ import {
   verifyPassword,
   signSessionToken,
   verifySessionToken,
+  resolveSessionSecret,
   getConfiguredOAuthProviders,
   buildOAuthAuthorizeUrl,
   getCallbackUrl,
@@ -30,13 +31,21 @@ function isValidProvider(p: string): p is OAuthProvider {
   return p === 'google' || p === 'facebook' || p === 'amazon';
 }
 
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export function attachUserMiddleware(
   db: AppDatabase,
-  sessionSecret: string = process.env.SESSION_SECRET || 'dev-wishlist-secret'
+  sessionSecret?: string
 ): express.RequestHandler {
+  const secret = resolveSessionSecret(sessionSecret);
   return (req, _res, next) => {
     const token = req.cookies?.[SESSION_COOKIE] as string | undefined;
-    const userId = verifySessionToken(token, sessionSecret);
+    const userId = verifySessionToken(token, secret);
     req.user = userId ? db.getUserById(userId) ?? null : null;
     next();
   };
@@ -51,9 +60,13 @@ export function createAuthRouter(
   }
 ): express.Router {
   const router = express.Router();
-  const secret = options?.sessionSecret || process.env.SESSION_SECRET || 'dev-wishlist-secret';
-  const exchangeFn = options?.oauthExchangeFn || defaultOAuthExchange;
   const env = options?.env || process.env;
+  const secret = resolveSessionSecret(options?.sessionSecret, env);
+  const exchangeFn = options?.oauthExchangeFn || defaultOAuthExchange;
+
+  function isSecureCookie(req: express.Request): boolean {
+    return Boolean(req.secure || (env.APP_URL || '').toLowerCase().startsWith('https://'));
+  }
 
   function ensureUserHasDefaultWishlist(user: User): void {
     const existing = db.getUserWishlists(user.id);
@@ -65,11 +78,12 @@ export function createAuthRouter(
     }
   }
 
-  function setSessionCookie(res: express.Response, userId: number): void {
+  function setSessionCookie(req: express.Request, res: express.Response, userId: number): void {
     const token = signSessionToken(userId, secret);
     res.cookie(SESSION_COOKIE, token, {
       httpOnly: true,
       sameSite: 'lax',
+      secure: isSecureCookie(req),
       path: '/',
       maxAge: 1000 * 60 * 60 * 24 * 60, // 60 days
     });
@@ -88,12 +102,22 @@ export function createAuthRouter(
 
   router.post('/register', (req, res) => {
     const { email, password, display_name } = req.body as {
-      email?: string;
-      password?: string;
-      display_name?: string;
+      email?: unknown;
+      password?: unknown;
+      display_name?: unknown;
     };
-    if (!email?.trim() || !password || password.length < 4 || !display_name?.trim()) {
-      res.status(400).json({ error: 'Name, email, and a password (4+ chars) are required.' });
+    if (
+      typeof email !== 'string' ||
+      typeof password !== 'string' ||
+      typeof display_name !== 'string' ||
+      !email.trim() ||
+      email.trim().length > 254 ||
+      password.length < 8 ||
+      password.length > 256 ||
+      !display_name.trim() ||
+      display_name.trim().length > 100
+    ) {
+      res.status(400).json({ error: 'Name, email, and a password (8+ chars) are required.' });
       return;
     }
 
@@ -109,13 +133,19 @@ export function createAuthRouter(
       password_hash: hashPassword(password),
     });
     ensureUserHasDefaultWishlist(user);
-    setSessionCookie(res, user.id);
+    setSessionCookie(req, res, user.id);
     res.status(201).json({ user });
   });
 
   router.post('/login', (req, res) => {
-    const { email, password } = req.body as { email?: string; password?: string };
-    if (!email?.trim() || !password) {
+    const { email, password } = req.body as { email?: unknown; password?: unknown };
+    if (
+      typeof email !== 'string' ||
+      typeof password !== 'string' ||
+      !email.trim() ||
+      !password ||
+      password.length > 256
+    ) {
       res.status(400).json({ error: 'Email and password are required.' });
       return;
     }
@@ -134,7 +164,7 @@ export function createAuthRouter(
       created_at: userWithHash.created_at,
     };
     ensureUserHasDefaultWishlist(user);
-    setSessionCookie(res, user.id);
+    setSessionCookie(req, res, user.id);
     res.json({ user });
   });
 
@@ -160,6 +190,7 @@ export function createAuthRouter(
     res.cookie(OAUTH_STATE_COOKIE, state, {
       httpOnly: true,
       sameSite: 'lax',
+      secure: isSecureCookie(req),
       path: '/',
       maxAge: 1000 * 60 * 15,
     });
@@ -174,11 +205,11 @@ export function createAuthRouter(
       return;
     }
 
-    const code = String(req.query.code || '');
-    const state = String(req.query.state || '');
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
     const cookieState = req.cookies?.[OAUTH_STATE_COOKIE] as string | undefined;
 
-    if (!code || !state || !cookieState || state !== cookieState) {
+    if (!code || !state || !cookieState || !timingSafeStringEqual(state, cookieState)) {
       res.status(400).json({ error: 'Invalid OAuth state or missing authorization code.' });
       return;
     }
@@ -189,7 +220,7 @@ export function createAuthRouter(
       const user = db.upsertOAuthUser(profile);
       ensureUserHasDefaultWishlist(user);
       res.clearCookie(OAUTH_STATE_COOKIE, { path: '/' });
-      setSessionCookie(res, user.id);
+      setSessionCookie(req, res, user.id);
       res.redirect(302, '/');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'OAuth login failed';
