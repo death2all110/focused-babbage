@@ -318,4 +318,39 @@ describe('Product URL Fetcher', () => {
     expect(meta.store_name).toBe('Nordic Pottery');
     expect(meta.partial).toBe(false);
   });
+
+  it('scrapes Chewy product pages using KIB price components and hashed CSS-modules carousel images', () => {
+    const chewyHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Frisco Heavy Duty Steel Cat & Dog Gate, 36-in - Chewy.com</title>
+        </head>
+        <body>
+          <h1 class="kib-product-title">Frisco Heavy Duty Steel Cat & Dog Gate, 36-in</h1>
+          <div class="kib-product-price">
+            <span class="kib-product-price__label">$49.99</span>
+          </div>
+          <div class="styles_carouselWrapper__abc12">
+            <img
+              class="styles_mainCarouselImage__kiYyf"
+              src="https://image.chewy.com/is/image/catalog/12345_MAIN._AC_SL600_V1564757530_.jpg"
+              alt="Frisco Gate"
+            />
+          </div>
+          <span itemprop="color">White</span>
+          <span itemprop="size">36-in</span>
+        </body>
+      </html>
+    `;
+
+    const meta = parseProductHtml(chewyHtml, 'https://www.chewy.com/dp/12345');
+    expect(meta.name).toBe('Frisco Heavy Duty Steel Cat & Dog Gate, 36-in');
+    expect(meta.price).toBe('$49.99');
+    expect(meta.image_url).toBe('https://image.chewy.com/is/image/catalog/12345_MAIN._AC_SL600_V1564757530_.jpg');
+    expect(meta.color).toBe('White');
+    expect(meta.size).toBe('36-in');
+    expect(meta.store_name).toBe('Chewy');
+    expect(meta.partial).toBe(false);
+  });
 });

@@ -244,6 +244,7 @@ export function detectStoreName(urlStr: string): string | null {
     if (host.includes('apple.com')) return 'Apple';
     if (host.includes('costco.com')) return 'Costco';
     if (host.includes('ikea.com')) return 'IKEA';
+    if (host.includes('chewy.com')) return 'Chewy';
 
     // Universal domain parsing for any other website in the world
     const cleanHost = host.replace(/^www\./, '');
@@ -347,7 +348,60 @@ function findProductNodesInJsonLd(node: unknown): Record<string, unknown>[] {
     results.push(...findProductNodesInJsonLd(obj['@graph']));
   }
 
+  if (obj.mainEntity && typeof obj.mainEntity === 'object') {
+    results.push(...findProductNodesInJsonLd(obj.mainEntity));
+  }
+
   return results;
+}
+
+export function extractCandidateUrlFromCheerio(
+  el: cheerio.Cheerio<any>,
+  sourceUrl: string
+): string | null {
+  if (!el || el.length === 0) return null;
+  const target = el.is('img') ? el : el.find('img').first();
+  const effective = target.length > 0 ? target : el;
+
+  // 1. Direct src (ignore data URIs and blank spacers)
+  const src = effective.attr('src');
+  if (src && !src.startsWith('data:') && !src.includes('blank.gif') && !src.includes('spacer.gif')) {
+    const resolved = resolveUrlMaybe(src, sourceUrl);
+    if (resolved) return resolved;
+  }
+
+  // 2. High-res / lazy data attributes
+  const dataAttrs = [
+    effective.attr('data-old-hires'),
+    effective.attr('data-hires'),
+    effective.attr('data-src'),
+    effective.attr('data-lazy-src'),
+    effective.attr('data-zoom-src'),
+    effective.attr('data-original'),
+    effective.attr('data-large-img-url'),
+    effective.attr('content'),
+  ];
+  for (const attr of dataAttrs) {
+    if (attr && !attr.startsWith('data:')) {
+      const resolved = resolveUrlMaybe(attr, sourceUrl);
+      if (resolved) return resolved;
+    }
+  }
+
+  // 3. Responsive srcset / data-srcset (take last item for highest resolution)
+  const srcset = effective.attr('srcset') || effective.attr('data-srcset');
+  if (srcset) {
+    const candidates = srcset.split(',').map((p) => p.trim().split(/\s+/)[0]);
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const item = candidates[i];
+      if (item && !item.startsWith('data:')) {
+        const resolved = resolveUrlMaybe(item, sourceUrl);
+        if (resolved) return resolved;
+      }
+    }
+  }
+
+  return null;
 }
 
 export function parseProductHtml(html: string, sourceUrl: string): FetchedProductMetadata {
@@ -481,6 +535,17 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
       '[data-product-price]',
       '[data-price]',
       '[data-price-amount]',
+      '.kib-product-price__label',
+      '.kib-product-price',
+      '[class*="kib-product-price"]',
+      '[class*="kib-product-price__label"]',
+      '[data-testid="advertised-price"]',
+      '[data-testid*="price"]',
+      '[class*="product-price"]',
+      '[class*="ProductPrice"]',
+      '[class*="price-label"]',
+      '[class*="price__label"]',
+      '[class*="Price__Label"]',
       '.price-item--sale',
       '.price-item--regular',
       '.price-item',
@@ -566,6 +631,17 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
 
   if (!image_url) {
     const imgSelectors = [
+      '[class*="styles_mainCarouselImage"]',
+      '[class*="mainCarouselImage"]',
+      'img[class*="mainCarouselImage"]',
+      'img[class*="styles_mainCarouselImage"]',
+      '[class*="mainCarousel"] img',
+      '[class*="CarouselImage"]',
+      'img[class*="CarouselImage"]',
+      '[data-testid*="carousel-image"]',
+      '[data-testid*="product-image"] img',
+      'img[data-testid*="carousel"]',
+      'img[data-testid*="product"]',
       'img[data-product-image]',
       'img[itemprop="image"]',
       '[itemprop="image"]',
@@ -582,10 +658,9 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     for (const sel of imgSelectors) {
       const el = $(sel).first();
       if (el.length === 0) continue;
-      const candidate = el.attr('src') || el.attr('data-src') || el.attr('content');
-      const resolved = resolveUrlMaybe(candidate, sourceUrl);
-      if (resolved) {
-        image_url = resolved;
+      const candidate = extractCandidateUrlFromCheerio(el, sourceUrl);
+      if (candidate) {
+        image_url = candidate;
         break;
       }
     }
@@ -665,7 +740,7 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     if (store_name) {
       const escapedStore = store_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       name = name
-        .replace(new RegExp(`\\s*[-|:•—]\\s*${escapedStore}.*$`, 'i'), '')
+        .replace(new RegExp(`\\s*[-|:•—]\\s*${escapedStore}(\\.com)?.*$`, 'i'), '')
         .replace(new RegExp(`^${escapedStore}\\s*[-|:•—]\\s*`, 'i'), '');
     }
     name = name.trim();
@@ -786,9 +861,9 @@ export async function fetchProductMetadata(
           partial: true,
         };
 
-    // Universal Fallback: If primary fetch was blocked/CAPTCHA'd or returned missing image/title on ANY site,
+    // Universal Fallback: If primary fetch was blocked/CAPTCHA'd or returned missing image/title/price on ANY site,
     // fetch with social link preview crawler (which e-commerce sites rarely block to allow previews in Messenger/WhatsApp/etc.)
-    if ((!primary.ok || result.partial || !result.image_url) && !options?.fetchFn) {
+    if ((!primary.ok || result.partial || !result.image_url || !result.price) && !options?.fetchFn) {
       const fallback = await fetchSafeHtml(
         targetFetchUrl,
         fetchImpl,
