@@ -59,6 +59,19 @@ Email/password registration works immediately out of the box. To enable OAuth si
 
 ---
 
+## Optional: Browserless / Headless Chrome Integration
+
+Certain e-commerce retailers (such as **Chewy**) enforce aggressive client-side bot challenges (Kasada / Akamai Bot Manager) that block raw HTTP/cURL requests with HTTP 429.
+
+If you have a [Browserless](https://www.browserless.io/) container running on your Unraid server or home network (e.g., `ghcr.io/browserless/chromium`), you can connect it:
+
+- **Variable:** `BROWSERLESS_URL=http://<BROWSERLESS_IP>:<PORT>` (e.g. `http://192.168.1.100:3000`)
+- **Variable (Optional):** `BROWSERLESS_TOKEN=<YOUR_TOKEN>`
+
+When configured, any product URL that triggers a bot challenge will automatically be rendered inside headless Chromium in the background, executing the challenge script and extracting the full product title, price, and photos.
+
+---
+
 ## Automated Releases
 
 A GitHub Actions workflow automatically triggers on every push to `main` to:

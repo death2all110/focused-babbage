@@ -824,9 +824,56 @@ async function fetchSafeHtml(
   return { ok: true, html: new TextDecoder().decode(bytes), finalUrl: currentUrl };
 }
 
+export async function fetchViaBrowserless(
+  targetUrl: string,
+  browserlessUrl: string,
+  token?: string | null,
+  fetchImpl: typeof fetch = fetch
+): Promise<string | null> {
+  try {
+    const raw = browserlessUrl.trim();
+    if (!raw) return null;
+    const parsed = new URL(raw);
+    let endpoint = parsed.pathname.endsWith('/content')
+      ? raw
+      : `${parsed.origin}/content`;
+    if (token) {
+      const sep = endpoint.includes('?') ? '&' : '?';
+      endpoint += `${sep}token=${encodeURIComponent(token)}`;
+    }
+    console.log(`[Fetcher] Requesting rendered HTML via Browserless: ${endpoint}`);
+    const res = await fetchImpl(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        url: targetUrl,
+        waitFor: 3000,
+        rejectResourceTypes: ['media', 'font'],
+      }),
+      signal: AbortSignal.timeout(25000),
+    });
+    if (!res.ok) {
+      console.warn(`[Fetcher] Browserless returned HTTP ${res.status}`);
+      return null;
+    }
+    const html = await res.text();
+    console.log(`[Fetcher] Browserless successfully rendered ${targetUrl} (${html.length} chars)`);
+    return html;
+  } catch (err) {
+    console.warn(`[Fetcher] Browserless request failed:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 export async function fetchProductMetadata(
   url: string,
-  options?: { fetchFn?: typeof fetch }
+  options?: {
+    fetchFn?: typeof fetch;
+    browserlessUrl?: string;
+    browserlessToken?: string;
+  }
 ): Promise<FetchedProductMetadata> {
   const safeUrl = validateSafeExternalUrl(url);
   const normalizedUrl = safeUrl.toString();
@@ -871,6 +918,34 @@ export async function fetchProductMetadata(
           store_name,
           partial: true,
         };
+
+    const browserlessUrl = options?.browserlessUrl || process.env.BROWSERLESS_URL;
+    const browserlessToken = options?.browserlessToken || process.env.BROWSERLESS_TOKEN;
+
+    // Browserless Headless Chrome Fallback: If primary fetch was blocked (429/403) or missing fields,
+    // and a Browserless container is configured, render the full page in headless Chromium (executing JS & bot challenges).
+    if ((!primary.ok || result.partial || !result.image_url || !result.price) && browserlessUrl) {
+      const renderedHtml = await fetchViaBrowserless(
+        targetFetchUrl,
+        browserlessUrl,
+        browserlessToken,
+        fetchImpl
+      );
+      if (renderedHtml) {
+        const bMeta = parseProductHtml(renderedHtml, normalizedUrl);
+        result = {
+          url: normalizedUrl,
+          name: (!result.partial && result.name) || bMeta.name || result.name,
+          price: bMeta.price || result.price,
+          image_url: bMeta.image_url || result.image_url,
+          color: bMeta.color || result.color,
+          size: bMeta.size || result.size,
+          model: bMeta.model || result.model,
+          store_name: bMeta.store_name || result.store_name,
+          partial: !(bMeta.name || result.name) || !(bMeta.price || result.price || bMeta.image_url || result.image_url),
+        };
+      }
+    }
 
     // Universal Fallback: If primary fetch was blocked/CAPTCHA'd or returned missing image/title/price on ANY site,
     // fetch with social link preview crawler (which e-commerce sites rarely block to allow previews in Messenger/WhatsApp/etc.)

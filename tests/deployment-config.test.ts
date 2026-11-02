@@ -15,9 +15,14 @@ describe('Unraid & Docker Deployment Artifacts', () => {
     expect(compose).toContain('GOOGLE_CLIENT_ID');
     expect(compose).toContain('FACEBOOK_CLIENT_ID');
     expect(compose).toContain('AMAZON_CLIENT_ID');
+    expect(compose).toContain('BROWSERLESS_URL');
+
+    const envExample = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
+    expect(envExample).toContain('BROWSERLESS_URL=');
 
     const unraidXml = fs.readFileSync(path.join(root, 'unraid-template.xml'), 'utf8');
     expect(unraidXml).toContain('<Container version="2">');
     expect(unraidXml).toContain('/mnt/user/appdata/family-wishlist');
+    expect(unraidXml).toContain('BROWSERLESS_URL');
   });
 });
