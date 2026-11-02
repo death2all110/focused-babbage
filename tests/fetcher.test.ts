@@ -379,6 +379,39 @@ describe('Product URL Fetcher', () => {
     expect(meta.store_name).toBe('Chewy');
   });
 
+  it('detects Chewy Akamai 403 WAF error pages and recovers slug title and CDN image', async () => {
+    const mockFetch = (async () => {
+      const akamaiWafHtml = `
+        <html lang="en-US">
+          <head>
+            <title>403 error - No treats beyond this point - Chewy</title>
+            <meta name="robots" content="noindex,nofollow">
+          </head>
+          <body>
+            <h1 class="sfw-header__logo"><a href="/">Chewy</a></h1>
+            <p>Access Denied - What happened? Chewy uses security services to protect its site.</p>
+            <img src="/app/images/sfw-403-dog.png" alt="Sad puppy" />
+          </body>
+        </html>
+      `;
+      return new Response(akamaiWafHtml, {
+        status: 403,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }) as unknown as typeof fetch;
+
+    const meta = await fetchProductMetadata(
+      'https://www.chewy.com/bark-animal-squeakers-snacks-multi/dp/1382534',
+      { fetchFn: mockFetch }
+    );
+
+    expect(meta.name).toBe('Bark Animal Squeakers Snacks Multi');
+    expect(meta.price).toBeNull();
+    expect(meta.image_url).toBe('https://image.chewy.com/is/image/catalog/1382534_MAIN._AC_SL600_V1_.jpg');
+    expect(meta.store_name).toBe('Chewy');
+    expect(meta.partial).toBe(true);
+  });
+
   it('uses Browserless container to render full HTML including price and images when configured', async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
       const urlStr = String(input);

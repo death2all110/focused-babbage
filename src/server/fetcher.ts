@@ -767,12 +767,15 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     name = name.trim();
   }
 
-  // Detect robot/CAPTCHA block pages
+  // Detect robot/CAPTCHA/WAF block pages
   const lowerName = name.toLowerCase();
   const isBlockedTitle =
     !name ||
     html.includes('window.KPSDK') ||
     html.includes('ips.js') ||
+    html.includes('Akamai 403 WAF') ||
+    html.includes('No treats beyond this point') ||
+    html.includes('Page error: 403') ||
     lowerName === 'robot or human?' ||
     lowerName.includes('access denied') ||
     lowerName.includes('sorry! something went wrong') ||
@@ -781,10 +784,15 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     lowerName.includes('security check') ||
     lowerName.includes('shieldsquare') ||
     lowerName.includes('perimeterx') ||
+    lowerName.includes('403 error') ||
+    lowerName.includes('no treats beyond this point') ||
+    lowerName.includes('pardon our interruption') ||
     lowerName === 'amazon.com';
 
   if (isBlockedTitle) {
     name = extractSlugFallbackTitle(sourceUrl);
+    price = null;
+    image_url = null;
   }
 
   const partial = isBlockedTitle || !name || (!price && !image_url);
@@ -886,7 +894,7 @@ export async function fetchViaBrowserless(
       },
       body: JSON.stringify({
         url: targetUrl,
-        waitForSelector: 'h1, [data-testid*="price"], .kib-product-price, [itemprop="name"]',
+        waitForSelector: '[data-testid*="price"], .kib-product-price, .kib-product-price__label, .product-price, [itemprop="price"]',
         bestAttempt: true,
         gotoOptions: {
           waitUntil: 'networkidle2',
@@ -926,10 +934,17 @@ export async function fetchViaBrowserless(
     let html = await res.text();
     console.log(`[Fetcher] Browserless successfully rendered ${targetUrl} (${html.length} chars)`);
 
-    // If the HTML returned is still a challenge shell (Kasada ips.js or Cloudflare challenge),
+    // If the HTML returned is still a challenge shell (Kasada ips.js, Akamai 403 WAF, or Cloudflare challenge),
     // escalate to Browserless /function which runs an explicit waitForSelector for 15s to let the PoW solve
-    if (html.includes('window.KPSDK') || html.includes('ips.js')) {
-      console.log(`[Fetcher] Browserless /content returned Kasada challenge shell. Escalating to Browserless /function to await PoW completion...`);
+    const isChallengeOrWaf =
+      html.includes('window.KPSDK') ||
+      html.includes('ips.js') ||
+      html.includes('Akamai 403 WAF') ||
+      html.includes('No treats beyond this point') ||
+      html.includes('403 error');
+
+    if (isChallengeOrWaf) {
+      console.log(`[Fetcher] Browserless /content returned bot challenge or WAF page. Escalating to Browserless /function with realistic client fingerprint...`);
       const funcEndpoint = endpoint.replace(/\/content(\?|$)/, '/function$1');
       try {
         const funcRes = await fetchImpl(funcEndpoint, {
@@ -938,14 +953,19 @@ export async function fetchViaBrowserless(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            code: `async ({ page, context }) => {
+            code: `export default async ({ page, context }) => {
+              await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+              await page.setExtraHTTPHeaders({
+                'Accept-Language': 'en-US,en;q=0.9',
+              });
               await page.goto(context.url, { waitUntil: 'domcontentloaded', timeout: 35000 });
               try {
-                await page.waitForSelector('h1, [data-testid*="price"], .kib-product-price, [itemprop="name"]', { timeout: 15000 });
+                await page.waitForSelector('[data-testid*="price"], .kib-product-price, .kib-product-price__label, .product-price, [itemprop="price"]', { timeout: 15000 });
               } catch (e) {
                 await new Promise(r => setTimeout(r, 4000));
               }
-              return await page.content();
+              const content = await page.content();
+              return { data: content, type: 'text/html' };
             }`,
             context: {
               url: targetUrl,
@@ -963,7 +983,12 @@ export async function fetchViaBrowserless(
           } catch {
             // raw html
           }
-          if (funcHtml && !funcHtml.includes('window.KPSDK')) {
+          if (
+            funcHtml &&
+            !funcHtml.includes('window.KPSDK') &&
+            !funcHtml.includes('No treats beyond this point') &&
+            !funcHtml.includes('403 error')
+          ) {
             console.log(`[Fetcher] Browserless /function successfully bypassed challenge (${funcHtml.length} chars)`);
             html = funcHtml;
           }
