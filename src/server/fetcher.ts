@@ -575,6 +575,27 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     }
   }
 
+  // 5. Embedded State / JSON scripts (e.g. Redux / Apollo / retail state scripts containing advertisedPrice / currentPrice / price)
+  if (!price) {
+    $('script:not([src])').each((_, el) => {
+      if (price) return;
+      const text = $(el).contents().text();
+      if (!text || text.length > 500000) return;
+      if (text.includes('price') || text.includes('Price') || text.includes('offers')) {
+        const m =
+          text.match(/"(?:advertisedPrice|unitPrice|salePrice|retailPrice|currentPrice|price)":\s*"?(\$?\d+(?:\.\d{1,2})?)"?/i) ||
+          text.match(/"priceAmount":\s*"?(\$?\d+(?:\.\d{1,2})?)"?/i);
+        if (m && m[1]) {
+          const val = parseFloat(m[1].replace('$', ''));
+          if (!isNaN(val) && val > 0 && val < 100000) {
+            const normalized = normalizePrice(m[1]);
+            if (normalized) price = normalized;
+          }
+        }
+      }
+    });
+  }
+
   // Universal Image Extraction (Amazon DOM + OpenGraph/Twitter + Microdata + Common E-Commerce selectors)
   if (!image_url) {
     const prioritySelectors = [
@@ -847,6 +868,11 @@ export async function fetchViaBrowserless(
       const sep = endpoint.includes('?') ? '&' : '?';
       endpoint += `${sep}token=${encodeURIComponent(token)}`;
     }
+    // Append stealth=true to enable Browserless anti-detection plugins (hides navigator.webdriver / automation flags)
+    if (!endpoint.includes('stealth=')) {
+      const sep = endpoint.includes('?') ? '&' : '?';
+      endpoint += `${sep}stealth=true`;
+    }
     console.log(`[Fetcher] Requesting rendered HTML via Browserless: ${endpoint}`);
     // Browserless /content endpoint uses Puppeteer Page.goto options:
     // { url, gotoOptions: { waitUntil: 'networkidle2' } }
@@ -870,10 +896,11 @@ export async function fetchViaBrowserless(
       const errText = await res.text().catch(() => '');
       console.warn(`[Fetcher] Browserless returned HTTP ${res.status}: ${errText.slice(0, 300)}`);
 
-      // If the container rejected gotoOptions (strict minimal schema), retry with pure { url }
+      // If the container rejected gotoOptions or query options (strict minimal schema), retry with pure { url } without stealth
       if (res.status === 400) {
-        console.log(`[Fetcher] Retrying Browserless with minimal payload { url }...`);
-        res = await fetchImpl(endpoint, {
+        console.log(`[Fetcher] Retrying Browserless with minimal endpoint and payload { url }...`);
+        const fallbackEndpoint = endpoint.replace(/[?&]stealth=true/, '');
+        res = await fetchImpl(fallbackEndpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -894,6 +921,12 @@ export async function fetchViaBrowserless(
 
     const html = await res.text();
     console.log(`[Fetcher] Browserless successfully rendered ${targetUrl} (${html.length} chars)`);
+
+    const isDebug = process.env.LOGLEVEL?.toUpperCase() === 'DEBUG' || !!process.env.DEBUG;
+    if (isDebug) {
+      console.log(`[Fetcher] [DEBUG] Browserless response HTML for ${targetUrl} (${html.length} chars):\n${html}`);
+    }
+
     return html;
   } catch (err) {
     console.warn(`[Fetcher] Browserless request failed:`, err instanceof Error ? err.message : err);
@@ -967,6 +1000,12 @@ export async function fetchProductMetadata(
       );
       if (renderedHtml) {
         const bMeta = parseProductHtml(renderedHtml, normalizedUrl);
+        const isDebug = process.env.LOGLEVEL?.toUpperCase() === 'DEBUG' || !!process.env.DEBUG;
+        if (isDebug) {
+          console.log(
+            `[Fetcher] [DEBUG] Browserless parse result: name="${bMeta.name}", price="${bMeta.price}", image_url="${bMeta.image_url}", partial=${bMeta.partial}`
+          );
+        }
         result = {
           url: normalizedUrl,
           name: (!result.partial && result.name) || bMeta.name || result.name,

@@ -463,11 +463,13 @@ describe('Product URL Fetcher', () => {
   });
 
   it('sends compliant Browserless payload without waitFor and retries on 400 schema error', async () => {
+    const receivedUrls: string[] = [];
     const receivedBodies: any[] = [];
     let callCount = 0;
 
-    const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       callCount++;
+      receivedUrls.push(String(input));
       if (init?.body) {
         receivedBodies.push(JSON.parse(String(init.body)));
       }
@@ -488,11 +490,30 @@ describe('Product URL Fetcher', () => {
 
     expect(html).toContain('Retried Content');
     expect(receivedBodies.length).toBe(2);
+    // Verified: stealth=true was included in initial request URL
+    expect(receivedUrls[0]).toContain('stealth=true');
     // Verified: no 'waitFor' was ever sent
     expect(receivedBodies[0].waitFor).toBeUndefined();
     expect(receivedBodies[0].url).toBe('https://example.com/item');
     expect(receivedBodies[0].gotoOptions?.waitUntil).toBe('networkidle2');
-    // Second attempt stripped options down to pure url
+    // Second attempt stripped options down to pure url and stripped stealth
+    expect(receivedUrls[1]).not.toContain('stealth=true');
     expect(receivedBodies[1]).toEqual({ url: 'https://example.com/item' });
+  });
+
+  it('extracts price from embedded state script tags (Redux/Apollo/Chewy JSON)', () => {
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Dog Toy</title></head>
+        <body>
+          <script type="application/json" id="__PRELOADED_STATE__">
+            {"catalog":{"product":{"id":"1382534","advertisedPrice":10.99,"inStock":true}}}
+          </script>
+        </body>
+      </html>
+    `;
+    const meta = parseProductHtml(html, 'https://www.chewy.com/item/1382534');
+    expect(meta.price).toBe('$10.99');
   });
 });
