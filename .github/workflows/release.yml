@@ -1,0 +1,110 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Build, Release & Docker Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Build production bundles
+        run: npm run build
+
+      - name: Package release archives
+        run: |
+          tar -czf family-wishlist-release.tar.gz \
+            dist/ \
+            package.json \
+            package-lock.json \
+            Dockerfile \
+            docker-compose.yml \
+            unraid-template.xml \
+            .env.example \
+            README.md \
+            LICENSE
+
+          zip -r family-wishlist-release.zip \
+            dist/ \
+            package.json \
+            package-lock.json \
+            Dockerfile \
+            docker-compose.yml \
+            unraid-template.xml \
+            .env.example \
+            README.md \
+            LICENSE
+
+      - name: Update 'latest' Git Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -fa latest -m "Release latest (${{ github.sha }})"
+          git push origin latest --force
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest Release
+          body: |
+            Automated production build from commit `${{ github.sha }}`.
+
+            ### Pre-built Artifacts
+            - `family-wishlist-release.tar.gz`: Pre-built bundle with production client, compiled server, and deployment templates.
+            - `family-wishlist-release.zip`: Pre-built zip archive.
+
+            ### Docker Container
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:latest
+            ```
+          files: |
+            family-wishlist-release.tar.gz
+            family-wishlist-release.zip
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}

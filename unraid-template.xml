@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>family-wishlist</Name>
-  <Repository>family-wishlist:latest</Repository>
-  <Registry/>
+  <Repository>ghcr.io/death2all110/focused-babbage:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
   <Overview>Self-hosted spoiler-free family wishlist web app with multi-store URL fetching, Things To Get Me list import, OAuth (Google, Facebook, Amazon), and no-login guest reservations.</Overview>
