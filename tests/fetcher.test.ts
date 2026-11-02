@@ -528,9 +528,13 @@ describe('Product URL Fetcher', () => {
     // Verified: no 'waitFor' was ever sent
     expect(receivedBodies[0].waitFor).toBeUndefined();
     expect(receivedBodies[0].url).toBe('https://example.com/item');
+    expect(receivedBodies[0].waitForSelector).toEqual({
+      selector: expect.any(String),
+      timeout: expect.any(Number),
+    });
     expect(receivedBodies[0].gotoOptions?.waitUntil).toBe('networkidle2');
-    // Second attempt stripped options down to pure url and stripped stealth
-    expect(receivedUrls[1]).not.toContain('stealth=true');
+    // Second attempt stripped options down to pure url while keeping stealth
+    expect(receivedUrls[1]).toContain('stealth=true');
     expect(receivedBodies[1]).toEqual({ url: 'https://example.com/item' });
   });
 
@@ -579,5 +583,27 @@ describe('Product URL Fetcher', () => {
     expect(html).toContain('$12.49');
     expect(requestedEndpoints.some((u) => u.includes('/content'))).toBe(true);
     expect(requestedEndpoints.some((u) => u.includes('/function'))).toBe(true);
+  });
+
+  it('uses custom USER_AGENT environment variable when provided', async () => {
+    process.env.USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:159.0) Gecko/20100101 Firefox/159.0';
+    try {
+      let sentHeaders: Record<string, string> = {};
+      const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        sentHeaders = (init?.headers as Record<string, string>) || {};
+        return new Response(
+          '<html><head><title>Test Item</title></head><body><h1>Test Item</h1><span class="price">$19.99</span></body></html>',
+          {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          }
+        );
+      }) as unknown as typeof fetch;
+
+      await fetchProductMetadata('https://example.com/product/123', { fetchFn: mockFetch });
+      expect(sentHeaders['User-Agent']).toBe('Mozilla/5.0 (X11; Linux x86_64; rv:159.0) Gecko/20100101 Firefox/159.0');
+    } finally {
+      delete process.env.USER_AGENT;
+    }
   });
 });

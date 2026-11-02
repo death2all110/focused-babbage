@@ -894,7 +894,10 @@ export async function fetchViaBrowserless(
       },
       body: JSON.stringify({
         url: targetUrl,
-        waitForSelector: '[data-testid*="price"], .kib-product-price, .kib-product-price__label, .product-price, [itemprop="price"]',
+        waitForSelector: {
+          selector: '[data-testid*="price"], .kib-product-price, .kib-product-price__label, .product-price, [itemprop="price"]',
+          timeout: 15000,
+        },
         bestAttempt: true,
         gotoOptions: {
           waitUntil: 'networkidle2',
@@ -908,11 +911,10 @@ export async function fetchViaBrowserless(
       const errText = await res.text().catch(() => '');
       console.warn(`[Fetcher] Browserless returned HTTP ${res.status}: ${errText.slice(0, 300)}`);
 
-      // If the container rejected waitForSelector, gotoOptions, or query options (strict minimal schema), retry with pure { url }
+      // If the container rejected options (strict minimal schema), retry with pure { url } keeping stealth
       if (res.status === 400) {
-        console.log(`[Fetcher] Retrying Browserless with minimal endpoint and payload { url }...`);
-        const fallbackEndpoint = endpoint.replace(/[?&]stealth=true/, '');
-        res = await fetchImpl(fallbackEndpoint, {
+        console.log(`[Fetcher] Retrying Browserless with minimal payload { url }...`);
+        res = await fetchImpl(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -954,7 +956,8 @@ export async function fetchViaBrowserless(
           },
           body: JSON.stringify({
             code: `export default async ({ page, context }) => {
-              await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+              const ua = context.userAgent || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+              await page.setUserAgent(ua);
               await page.setExtraHTTPHeaders({
                 'Accept-Language': 'en-US,en;q=0.9',
               });
@@ -969,6 +972,7 @@ export async function fetchViaBrowserless(
             }`,
             context: {
               url: targetUrl,
+              userAgent: process.env.USER_AGENT || undefined,
             },
           }),
           signal: AbortSignal.timeout(40000),
@@ -983,14 +987,16 @@ export async function fetchViaBrowserless(
           } catch {
             // raw html
           }
-          if (
-            funcHtml &&
-            !funcHtml.includes('window.KPSDK') &&
-            !funcHtml.includes('No treats beyond this point') &&
-            !funcHtml.includes('403 error')
-          ) {
+          const stillBlocked =
+            !funcHtml ||
+            funcHtml.includes('window.KPSDK') ||
+            funcHtml.includes('No treats beyond this point') ||
+            funcHtml.includes('403 error');
+          if (!stillBlocked) {
             console.log(`[Fetcher] Browserless /function successfully bypassed challenge (${funcHtml.length} chars)`);
             html = funcHtml;
+          } else {
+            console.log(`[Fetcher] Browserless /function also blocked (${funcHtml?.length || 0} chars, 403=${funcHtml?.includes('403 error') ?? false})`);
           }
         } else {
           const funcErr = await funcRes.text().catch(() => '');
@@ -1031,6 +1037,10 @@ export async function fetchProductMetadata(
   console.log(`[Fetcher] Fetching product: ${normalizedUrl} (Store: ${store_name || 'Generic'})`);
 
   try {
+    const defaultUserAgent =
+      process.env.USER_AGENT ||
+      'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0';
+
     const primaryHeaders: Record<string, string> =
       store_name === 'Walmart'
         ? {
@@ -1039,7 +1049,7 @@ export async function fetchProductMetadata(
             'Accept-Language': 'en-US,en;q=0.9',
           }
         : {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0',
+            'User-Agent': defaultUserAgent,
             Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Upgrade-Insecure-Requests': '1',

@@ -19,11 +19,13 @@ describe('Unraid & Docker Deployment Artifacts', () => {
 
     const envExample = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
     expect(envExample).toContain('BROWSERLESS_URL=');
+    expect(envExample).toContain('USER_AGENT=');
 
     const unraidXml = fs.readFileSync(path.join(root, 'unraid-template.xml'), 'utf8');
     expect(unraidXml).toContain('<Container version="2">');
     expect(unraidXml).toContain('/mnt/user/appdata/family-wishlist');
     expect(unraidXml).toContain('BROWSERLESS_URL');
+    expect(unraidXml).toContain('USER_AGENT');
     expect(unraidXml).toContain('<Icon>https://raw.githubusercontent.com/death2all110/focused-babbage/main/public/icon.png</Icon>');
 
     // Icons and favicons exist
