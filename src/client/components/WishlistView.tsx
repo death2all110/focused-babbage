@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Gift,
   ShieldAlert,
+  X,
 } from 'lucide-react';
 import type { User, WishlistItem, WishlistViewResponse } from '../../shared/types.js';
 
@@ -21,6 +22,7 @@ interface WishlistViewProps {
   onEditItem?: (item: WishlistItem) => void;
   onDeleteItem?: (itemId: number) => void;
   onOpenImport?: () => void;
+  onDeleteWishlist?: (slug: string) => void;
 }
 
 const INPUT_CLASS =
@@ -34,10 +36,12 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
   onEditItem,
   onDeleteItem,
   onOpenImport,
+  onDeleteWishlist,
 }) => {
   const { wishlist, is_owner, items } = data;
   const [activeTab, setActiveTab] = useState<'available' | 'reserved'>('available');
   const [copied, setCopied] = useState(false);
+  const [showDeleteWishlistModal, setShowDeleteWishlistModal] = useState(false);
   const [reservingItemId, setReservingItemId] = useState<number | null>(null);
   const [guestName, setGuestName] = useState<string>(() => {
     if (currentUser?.display_name) return currentUser.display_name;
@@ -219,6 +223,16 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
               >
                 <Plus className="w-4 h-4" />
                 <span>Add Item</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowDeleteWishlistModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-slate-800 hover:bg-red-950/60 text-slate-300 hover:text-red-300 border border-slate-700 hover:border-red-800/60 transition-colors"
+                title="Delete this wishlist"
+              >
+                <Trash2 className="w-4 h-4 text-slate-400 group-hover:text-red-400" />
+                <span>Delete List</span>
               </button>
             </>
           )}
@@ -439,6 +453,48 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
           </div>
         ))}
       </div>
+      )}
+      {/* Delete Wishlist Confirmation Modal */}
+      {showDeleteWishlistModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
+          <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-700 p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-slate-50 flex items-center gap-2">
+                <Trash2 className="w-5 h-5 text-red-400" />
+                <span>Delete Wishlist</span>
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowDeleteWishlistModal(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-300">
+              Are you sure you want to permanently delete <strong>{wishlist.title}</strong>? All {items.length} {items.length === 1 ? 'item' : 'items'} on this list will be removed. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteWishlistModal(false)}
+                className="px-4 py-2 rounded-lg text-sm text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteWishlistModal(false);
+                  onDeleteWishlist?.(wishlist.slug);
+                }}
+                className="px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors"
+              >
+                Yes, Delete Wishlist
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

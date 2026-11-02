@@ -77,4 +77,51 @@ describe('Wishlist API & OpenGraph', () => {
     expect(deletionRes.status).toBe(200);
     expect(deletionRes.text).toContain('User Data Deletion Instructions');
   });
+
+  it('allows owner to delete their wishlist and cascades deletion of items', async () => {
+    const reg = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'owner@example.com', password: 'password123', display_name: 'Owner' });
+    const ownerCookie = reg.headers['set-cookie'];
+
+    const listsRes = await request(app).get('/api/wishlists').set('Cookie', ownerCookie);
+    const slug = listsRes.body.wishlists[0].slug;
+
+    // Add an item to the list
+    const addRes = await request(app)
+      .post(`/api/wishlists/${slug}/items`)
+      .set('Cookie', ownerCookie)
+      .send({ name: 'Test Item' });
+    expect(addRes.status).toBe(201);
+    const itemId = addRes.body.item.id;
+
+    // Unauthorized delete fails
+    const unauthDel = await request(app).delete(`/api/wishlists/${slug}`);
+    expect(unauthDel.status).toBe(401);
+
+    // Another user cannot delete the list
+    const otherReg = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'other@example.com', password: 'password123', display_name: 'Other' });
+    const otherCookie = otherReg.headers['set-cookie'];
+    const forbiddenDel = await request(app)
+      .delete(`/api/wishlists/${slug}`)
+      .set('Cookie', otherCookie);
+    expect(forbiddenDel.status).toBe(403);
+
+    // Owner deletes the list
+    const deleteRes = await request(app)
+      .delete(`/api/wishlists/${slug}`)
+      .set('Cookie', ownerCookie);
+    expect(deleteRes.status).toBe(200);
+    expect(deleteRes.body.ok).toBe(true);
+
+    // Wishlist is no longer found
+    const getRes = await request(app).get(`/api/wishlists/${slug}`);
+    expect(getRes.status).toBe(404);
+
+    // Cascaded item deletion
+    const itemRow = db.getItemImageBlob(itemId);
+    expect(itemRow).toBeUndefined();
+  });
 });

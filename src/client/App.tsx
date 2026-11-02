@@ -203,6 +203,38 @@ export const App: React.FC = () => {
     await loadWishlist(activeSlug);
   };
 
+  const handleDeleteWishlist = async (slug: string) => {
+    try {
+      const res = await fetch(`/api/wishlists/${slug}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setToast(body.error || 'Failed to delete wishlist.');
+        return;
+      }
+      setToast('Wishlist deleted.');
+      const [myRes, famRes] = await Promise.all([
+        fetch('/api/wishlists'),
+        fetch('/api/family'),
+      ]);
+      const myData = myRes.ok ? ((await myRes.json()) as { wishlists: Wishlist[] }) : { wishlists: [] };
+      const famData = famRes.ok ? ((await famRes.json()) as { wishlists: Wishlist[] }) : { wishlists: [] };
+      const remaining = myData.wishlists || [];
+      setMyWishlists(remaining);
+      setFamilyWishlists(famData.wishlists || []);
+
+      if (remaining.length > 0) {
+        navigateToSlug(remaining[0].slug);
+      } else {
+        navigateToFamily();
+      }
+    } catch {
+      setToast('Network error while deleting wishlist.');
+    }
+  };
+
   const handleCreateWishlist = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newListTitle.trim()) return;
@@ -263,7 +295,7 @@ export const App: React.FC = () => {
         )}
 
         {/* Signed-in Owner Bar: Switch between lists & Bookmarklet helper */}
-        {currentUser && myWishlists.length > 0 && (
+        {currentUser && (
           <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/70 border border-slate-800 rounded-xl px-4 py-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1">
@@ -332,6 +364,7 @@ export const App: React.FC = () => {
               setShowItemModal(true);
             }}
             onDeleteItem={handleDeleteItem}
+            onDeleteWishlist={handleDeleteWishlist}
             onOpenImport={() => setShowImportModal(true)}
           />
         ) : (
@@ -345,7 +378,7 @@ export const App: React.FC = () => {
                   required!
                 </p>
               </div>
-              {!currentUser && (
+              {!currentUser ? (
                 <button
                   type="button"
                   onClick={() => setShowAuthModal(true)}
@@ -354,7 +387,16 @@ export const App: React.FC = () => {
                   <Plus className="w-4 h-4" />
                   <span>Sign In to Create Your List</span>
                 </button>
-              )}
+              ) : myWishlists.length === 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setShowNewListModal(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create a Wishlist</span>
+                </button>
+              ) : null}
             </div>
 
             {familyWishlists.length === 0 ? (

@@ -138,4 +138,54 @@ describe('Wishlist Frontend Views', () => {
     expect(newSectionInput.className).toContain('bg-slate-900');
     expect(newSectionInput.className).toContain('text-slate-50');
   });
+
+  it('renders Delete List button for owner and opens confirmation modal before triggering onDeleteWishlist', () => {
+    const onDeleteWishlist = vi.fn();
+    const ownerData: WishlistViewResponse = {
+      ...sampleVisitorData,
+      is_owner: true,
+      items: sampleVisitorData.items.map((i) => ({
+        ...i,
+        is_reserved: false,
+        reserved_by_name: null,
+      })),
+    };
+
+    render(
+      <WishlistView
+        data={ownerData}
+        currentUser={{
+          id: 10,
+          email: 's@e.com',
+          display_name: 'Sarah',
+          avatar_url: null,
+          created_at: '',
+        }}
+        onRefresh={vi.fn()}
+        onDeleteWishlist={onDeleteWishlist}
+      />
+    );
+
+    // Click "Delete List" button
+    const deleteBtn = screen.getByRole('button', { name: /Delete List/i });
+    expect(deleteBtn).toBeInTheDocument();
+    fireEvent.click(deleteBtn);
+
+    // Confirmation modal should appear with list title and warnings
+    expect(screen.getByRole('heading', { name: /Delete Wishlist/i })).toBeInTheDocument();
+    expect(screen.getByText(/Are you sure you want to permanently delete/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Sarah's Holiday Wishlist").length).toBeGreaterThanOrEqual(2);
+
+    // Clicking "Cancel" closes the modal without calling callback
+    const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+    fireEvent.click(cancelBtn);
+    expect(screen.queryByRole('heading', { name: /Delete Wishlist/i })).not.toBeInTheDocument();
+    expect(onDeleteWishlist).not.toHaveBeenCalled();
+
+    // Reopen modal and confirm deletion
+    fireEvent.click(deleteBtn);
+    const confirmBtn = screen.getByRole('button', { name: /Yes, Delete Wishlist/i });
+    fireEvent.click(confirmBtn);
+    expect(onDeleteWishlist).toHaveBeenCalledWith('sarah-holiday');
+  });
 });
