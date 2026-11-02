@@ -848,22 +848,50 @@ export async function fetchViaBrowserless(
       endpoint += `${sep}token=${encodeURIComponent(token)}`;
     }
     console.log(`[Fetcher] Requesting rendered HTML via Browserless: ${endpoint}`);
-    const res = await fetchImpl(endpoint, {
+    // Browserless /content endpoint uses Puppeteer Page.goto options:
+    // { url, gotoOptions: { waitUntil: 'networkidle2' } }
+    // Note: 'waitFor' is not allowed by Browserless's Joi body schema and causes HTTP 400.
+    let res = await fetchImpl(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         url: targetUrl,
-        waitFor: 3000,
-        rejectResourceTypes: ['media', 'font'],
+        gotoOptions: {
+          waitUntil: 'networkidle2',
+          timeout: 25000,
+        },
       }),
-      signal: AbortSignal.timeout(25000),
+      signal: AbortSignal.timeout(30000),
     });
+
     if (!res.ok) {
-      console.warn(`[Fetcher] Browserless returned HTTP ${res.status}`);
+      const errText = await res.text().catch(() => '');
+      console.warn(`[Fetcher] Browserless returned HTTP ${res.status}: ${errText.slice(0, 300)}`);
+
+      // If the container rejected gotoOptions (strict minimal schema), retry with pure { url }
+      if (res.status === 400) {
+        console.log(`[Fetcher] Retrying Browserless with minimal payload { url }...`);
+        res = await fetchImpl(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            url: targetUrl,
+          }),
+          signal: AbortSignal.timeout(30000),
+        });
+      }
+    }
+
+    if (!res.ok) {
+      const finalErr = await res.text().catch(() => '');
+      console.warn(`[Fetcher] Browserless fallback request failed (HTTP ${res.status}): ${finalErr.slice(0, 300)}`);
       return null;
     }
+
     const html = await res.text();
     console.log(`[Fetcher] Browserless successfully rendered ${targetUrl} (${html.length} chars)`);
     return html;

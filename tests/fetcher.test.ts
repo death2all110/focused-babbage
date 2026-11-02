@@ -5,6 +5,7 @@ import {
   normalizePrice,
   fetchProductMetadata,
   downloadImageBlob,
+  fetchViaBrowserless,
 } from '../src/server/fetcher';
 
 describe('Product URL Fetcher', () => {
@@ -459,5 +460,39 @@ describe('Product URL Fetcher', () => {
     expect(meta.image_url).toBe('https://arbitrary-boutique.com/img/vase.jpg');
     expect(meta.store_name).toBe('Arbitrary Boutique');
     expect(meta.partial).toBe(false);
+  });
+
+  it('sends compliant Browserless payload without waitFor and retries on 400 schema error', async () => {
+    const receivedBodies: any[] = [];
+    let callCount = 0;
+
+    const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      callCount++;
+      if (init?.body) {
+        receivedBodies.push(JSON.parse(String(init.body)));
+      }
+      if (callCount === 1) {
+        // First call simulates a strict container rejecting extra options
+        return new Response('"gotoOptions" is not allowed', { status: 400 });
+      }
+      // Second call with minimal payload succeeds
+      return new Response('<html><body><h1>Retried Content</h1></body></html>', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const html = await fetchViaBrowserless(
+      'https://example.com/item',
+      'https://browserless.example.com',
+      'my-token',
+      mockFetch
+    );
+
+    expect(html).toContain('Retried Content');
+    expect(receivedBodies.length).toBe(2);
+    // Verified: no 'waitFor' was ever sent
+    expect(receivedBodies[0].waitFor).toBeUndefined();
+    expect(receivedBodies[0].url).toBe('https://example.com/item');
+    expect(receivedBodies[0].gotoOptions?.waitUntil).toBe('networkidle2');
+    // Second attempt stripped options down to pure url
+    expect(receivedBodies[1]).toEqual({ url: 'https://example.com/item' });
   });
 });
