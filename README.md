@@ -1,6 +1,8 @@
-# Family Wishlist
-
-A self-hosted, spoiler-free family wishlist web application built for Unraid & Docker, designed as a modern replacement for *Things To Get Me*.
+<div align="center">
+  <img src="public/icon.png" width="120" height="120" alt="Family Wishlist Container Icon" />
+  <h1>Family Wishlist</h1>
+  <p><em>A self-hosted, spoiler-free family wishlist web application built for Unraid &amp; Docker</em></p>
+</div>
 
 ## Key Features
 

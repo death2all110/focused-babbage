@@ -39,6 +39,8 @@ jobs:
         run: |
           tar -czf family-wishlist-release.tar.gz \
             dist/ \
+            public/ \
+            icon.png \
             package.json \
             package-lock.json \
             Dockerfile \
@@ -50,6 +52,8 @@ jobs:
 
           zip -r family-wishlist-release.zip \
             dist/ \
+            public/ \
+            icon.png \
             package.json \
             package-lock.json \
             Dockerfile \

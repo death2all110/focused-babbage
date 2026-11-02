@@ -24,5 +24,15 @@ describe('Unraid & Docker Deployment Artifacts', () => {
     expect(unraidXml).toContain('<Container version="2">');
     expect(unraidXml).toContain('/mnt/user/appdata/family-wishlist');
     expect(unraidXml).toContain('BROWSERLESS_URL');
+    expect(unraidXml).toContain('<Icon>https://raw.githubusercontent.com/death2all110/focused-babbage/main/public/icon.png</Icon>');
+
+    // Icons and favicons exist
+    expect(fs.existsSync(path.join(root, 'public', 'icon.png'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'public', 'icon.svg'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'public', 'favicon.ico'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'public', 'favicon.svg'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'public', 'favicon-32x32.png'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'public', 'apple-touch-icon.png'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'icon.png'))).toBe(true);
   });
 });

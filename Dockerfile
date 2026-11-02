@@ -8,6 +8,8 @@ RUN npm ci
 
 COPY tsconfig.json tsconfig.server.json vite.config.ts tailwind.config.js postcss.config.js index.html ./
 COPY src ./src
+COPY public ./public
+COPY icon.png ./
 
 RUN npm run build && npm prune --omit=dev
 

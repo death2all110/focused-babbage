@@ -1,0 +1,181 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="50%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+
+    <!-- Border Glow -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.6"/>
+      <stop offset="50%" stop-color="#3b82f6" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.1"/>
+    </linearGradient>
+
+    <!-- Inner Ambient Glow -->
+    <radialGradient id="ambientGlow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.25"/>
+      <stop offset="70%" stop-color="#1d4ed8" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Box Body Gradient -->
+    <linearGradient id="boxGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="35%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1e40af"/>
+    </linearGradient>
+
+    <!-- Box Lid Gradient -->
+    <linearGradient id="lidGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="30%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+
+    <!-- Gold Ribbon Gradient -->
+    <linearGradient id="ribbonGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#d97706"/>
+      <stop offset="25%" stop-color="#f59e0b"/>
+      <stop offset="50%" stop-color="#fef08a"/>
+      <stop offset="75%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+
+    <!-- Ribbon Vertical Gradient (for horizontal segments / bow) -->
+    <linearGradient id="ribbonVertGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="30%" stop-color="#fbbf24"/>
+      <stop offset="80%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+
+    <!-- Bow Knot Gradient -->
+    <radialGradient id="knotGrad" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#fef9c3"/>
+      <stop offset="30%" stop-color="#fde047"/>
+      <stop offset="65%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </radialGradient>
+
+    <!-- Star Glow -->
+    <linearGradient id="starGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="40%" stop-color="#fef08a"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+
+    <!-- Universal Shadow Filter using Blur + Offset -->
+    <filter id="shadowFilter" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="12" result="blur"/>
+      <feOffset in="blur" dx="0" dy="14" result="offsetBlur"/>
+      <feFlood flood-color="#000000" flood-opacity="0.5" result="color"/>
+      <feComposite in="color" in2="offsetBlur" operator="in" result="shadow"/>
+      <feMerge>
+        <feMergeNode in="shadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="lidShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur"/>
+      <feOffset in="blur" dx="0" dy="6" result="offsetBlur"/>
+      <feFlood flood-color="#020617" flood-opacity="0.6" result="color"/>
+      <feComposite in="color" in2="offsetBlur" operator="in" result="shadow"/>
+      <feMerge>
+        <feMergeNode in="shadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="glowFilter" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Container Base Squircle -->
+  <rect width="512" height="512" rx="116" fill="url(#bgGrad)"/>
+  <rect width="512" height="512" rx="116" fill="url(#ambientGlow)"/>
+  <rect x="2" y="2" width="508" height="508" rx="114" fill="none" stroke="url(#borderGrad)" stroke-width="4"/>
+
+  <!-- Subtle Top Highlight Line on Squircle -->
+  <path d="M 120 4 Q 256 8 392 4" stroke="#ffffff" stroke-opacity="0.15" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Gift Box Shadow on Ground -->
+  <ellipse cx="256" cy="425" rx="145" ry="22" fill="#020617" opacity="0.6" filter="url(#shadowFilter)"/>
+
+  <!-- MAIN GIFT GROUP with Drop Shadow -->
+  <g filter="url(#shadowFilter)">
+    <!-- Box Base -->
+    <rect x="146" y="236" width="220" height="174" rx="18" fill="url(#boxGrad)"/>
+
+    <!-- Subtle Bevel / Highlight on Left Edge of Box Base -->
+    <path d="M 148 254 L 148 392" stroke="#60a5fa" stroke-width="3" stroke-linecap="round" opacity="0.4"/>
+
+    <!-- Vertical Ribbon on Box Base -->
+    <rect x="235" y="236" width="42" height="174" fill="url(#ribbonGrad)"/>
+    <!-- Ribbon Sheen line -->
+    <line x1="254" y1="236" x2="254" y2="410" stroke="#ffffff" stroke-width="2.5" opacity="0.6"/>
+
+    <!-- Lid Drop Shadow on Base -->
+    <rect x="132" y="188" width="248" height="52" rx="14" fill="#000000" opacity="0.3" filter="url(#lidShadow)"/>
+
+    <!-- Box Lid -->
+    <rect x="132" y="186" width="248" height="52" rx="14" fill="url(#lidGrad)"/>
+
+    <!-- Top Highlight on Lid -->
+    <path d="M 146 190 L 366 190" stroke="#93c5fd" stroke-width="2.5" stroke-linecap="round" opacity="0.7"/>
+
+    <!-- Vertical Ribbon on Box Lid -->
+    <rect x="235" y="186" width="42" height="52" fill="url(#ribbonGrad)"/>
+    <line x1="254" y1="186" x2="254" y2="238" stroke="#ffffff" stroke-width="2.5" opacity="0.6"/>
+
+    <!-- RIBBON BOW ON TOP -->
+    <!-- Ribbon Left Loop -->
+    <path d="M 252 188 C 220 184 165 168 168 126 C 170 94 218 96 244 146 C 250 158 253 174 254 186 Z"
+          fill="url(#ribbonVertGrad)"/>
+    <!-- Left Loop Inner Shadow / Fold -->
+    <path d="M 235 152 C 220 125 188 120 184 135 C 180 148 208 165 240 172 Z"
+          fill="#d97706" opacity="0.75"/>
+    <path d="M 174 120 C 184 105 215 106 238 140"
+          stroke="#fef08a" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.8"/>
+
+    <!-- Ribbon Right Loop -->
+    <path d="M 260 188 C 292 184 347 168 344 126 C 342 94 294 96 268 146 C 262 158 259 174 258 186 Z"
+          fill="url(#ribbonVertGrad)"/>
+    <!-- Right Loop Inner Shadow / Fold -->
+    <path d="M 277 152 C 292 125 324 120 328 135 C 332 148 304 165 272 172 Z"
+          fill="#d97706" opacity="0.75"/>
+    <path d="M 338 120 C 328 105 297 106 274 140"
+          stroke="#fef08a" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.8"/>
+
+    <!-- Ribbon Tails draping down -->
+    <path d="M 242 192 C 230 206 208 226 194 238 C 206 238 224 230 236 218 L 244 195 Z"
+          fill="url(#ribbonVertGrad)"/>
+    <path d="M 270 192 C 282 206 304 226 318 238 C 306 238 288 230 276 218 L 268 195 Z"
+          fill="url(#ribbonVertGrad)"/>
+
+    <!-- Center Knot of Bow -->
+    <ellipse cx="256" cy="186" rx="20" ry="16" fill="url(#knotGrad)"/>
+    <ellipse cx="254" cy="183" rx="14" ry="10" fill="none" stroke="#fef08a" stroke-width="2" opacity="0.6"/>
+  </g>
+
+  <!-- SPARKLES / STARS (Magic & Celebration) -->
+  <!-- Big 4-point Sparkle Top Right -->
+  <g transform="translate(382, 115)" filter="url(#glowFilter)">
+    <path d="M 0 -26 Q 2 -4 26 0 Q 2 4 0 26 Q -2 4 -26 0 Q -2 -4 0 -26 Z" fill="url(#starGrad)"/>
+    <circle cx="0" cy="0" r="4" fill="#ffffff"/>
+  </g>
+
+  <!-- Small 4-point Sparkle Bottom Left -->
+  <g transform="translate(108, 335)" filter="url(#glowFilter)">
+    <path d="M 0 -15 Q 1.5 -2.5 15 0 Q 1.5 2.5 0 15 Q -1.5 2.5 -15 0 Q -1.5 -2.5 0 -15 Z" fill="url(#starGrad)"/>
+    <circle cx="0" cy="0" r="2.5" fill="#ffffff"/>
+  </g>
+
+  <!-- Tiny Accent Dot Top Left -->
+  <circle cx="130" cy="140" r="3.5" fill="#38bdf8" opacity="0.75" filter="url(#glowFilter)"/>
+</svg>

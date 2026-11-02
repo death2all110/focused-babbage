@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="favBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+    <linearGradient id="favBox" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="favLid" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="favGold" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="50%" stop-color="#fef08a"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="favGoldV" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="60%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#b45309"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base for High Contrast on both dark & light browser tabs -->
+  <rect width="64" height="64" rx="16" fill="url(#favBg)" stroke="#38bdf8" stroke-width="1.5" stroke-opacity="0.5"/>
+
+  <!-- Gift Box Base -->
+  <rect x="17" y="30" width="30" height="23" rx="3.5" fill="url(#favBox)"/>
+
+  <!-- Vertical Ribbon Base -->
+  <rect x="29" y="30" width="6" height="23" fill="url(#favGold)"/>
+
+  <!-- Gift Box Lid -->
+  <rect x="15" y="23" width="34" height="8" rx="2.5" fill="url(#favLid)"/>
+
+  <!-- Vertical Ribbon Lid -->
+  <rect x="29" y="23" width="6" height="8" fill="url(#favGold)"/>
+
+  <!-- Bow Loops -->
+  <path d="M 31 23 C 26 22 19 20 20 14 C 21 10 27 11 30 18 Z" fill="url(#favGoldV)"/>
+  <path d="M 33 23 C 38 22 45 20 44 14 C 43 10 37 11 34 18 Z" fill="url(#favGoldV)"/>
+  <circle cx="32" cy="23" r="3" fill="#fde047"/>
+
+  <!-- Little sparkle star -->
+  <path d="M 48 9 Q 48.5 13 52 14 Q 48.5 15 48 19 Q 47.5 15 44 14 Q 47.5 13 48 9 Z" fill="#fef08a"/>
+</svg>

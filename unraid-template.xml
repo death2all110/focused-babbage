@@ -8,6 +8,7 @@
   <Overview>Self-hosted spoiler-free family wishlist web app with multi-store URL fetching, Things To Get Me list import, OAuth (Google, Facebook, Amazon), and no-login guest reservations.</Overview>
   <Category>Tools:Productivity</Category>
   <WebUI>http://[IP]:[PORT:3000]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/death2all110/focused-babbage/main/public/icon.png</Icon>
   <Config Name="WebUI Port" Target="3000" Default="3000" Mode="tcp" Description="HTTP port for Family Wishlist" Type="Port" Display="always" Required="true" Mask="false">3000</Config>
   <Config Name="App Data (/data)" Target="/data" Default="/mnt/user/appdata/family-wishlist" Mode="rw" Description="Persistent SQLite database storage" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/family-wishlist</Config>
   <Config Name="APP_URL" Target="APP_URL" Default="http://localhost:3000" Mode="" Description="Public/LAN base URL used for OAuth callbacks" Type="Variable" Display="always" Required="true" Mask="false">http://localhost:3000</Config>
