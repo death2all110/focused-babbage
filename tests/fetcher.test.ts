@@ -516,4 +516,35 @@ describe('Product URL Fetcher', () => {
     const meta = parseProductHtml(html, 'https://www.chewy.com/item/1382534');
     expect(meta.price).toBe('$10.99');
   });
+
+  it('escalates to Browserless /function when /content returns a Kasada PoW challenge shell', async () => {
+    const requestedEndpoints: string[] = [];
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const urlStr = String(input);
+      requestedEndpoints.push(urlStr);
+      if (urlStr.includes('/content')) {
+        // First returns the 911-byte Kasada challenge
+        const kasadaHtml = `<!DOCTYPE html><html><body><script>window.KPSDK={};</script><script src="/ips.js"></script></body></html>`;
+        return new Response(kasadaHtml, { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      if (urlStr.includes('/function')) {
+        // Function waits and returns resolved HTML
+        const solvedHtml = `<!DOCTYPE html><html><body><h1>Chewy Dog Toy</h1><span class="kib-product-price">$12.49</span></body></html>`;
+        return new Response(solvedHtml, { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const html = await fetchViaBrowserless(
+      'https://www.chewy.com/dp/123',
+      'https://browserless.darkxshadows.net',
+      'token123',
+      mockFetch
+    );
+
+    expect(html).toContain('Chewy Dog Toy');
+    expect(html).toContain('$12.49');
+    expect(requestedEndpoints.some((u) => u.includes('/content'))).toBe(true);
+    expect(requestedEndpoints.some((u) => u.includes('/function'))).toBe(true);
+  });
 });

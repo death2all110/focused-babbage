@@ -771,6 +771,8 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
   const lowerName = name.toLowerCase();
   const isBlockedTitle =
     !name ||
+    html.includes('window.KPSDK') ||
+    html.includes('ips.js') ||
     lowerName === 'robot or human?' ||
     lowerName.includes('access denied') ||
     lowerName.includes('sorry! something went wrong') ||
@@ -884,6 +886,8 @@ export async function fetchViaBrowserless(
       },
       body: JSON.stringify({
         url: targetUrl,
+        waitForSelector: 'h1, [data-testid*="price"], .kib-product-price, [itemprop="name"]',
+        bestAttempt: true,
         gotoOptions: {
           waitUntil: 'networkidle2',
           timeout: 25000,
@@ -896,7 +900,7 @@ export async function fetchViaBrowserless(
       const errText = await res.text().catch(() => '');
       console.warn(`[Fetcher] Browserless returned HTTP ${res.status}: ${errText.slice(0, 300)}`);
 
-      // If the container rejected gotoOptions or query options (strict minimal schema), retry with pure { url } without stealth
+      // If the container rejected waitForSelector, gotoOptions, or query options (strict minimal schema), retry with pure { url }
       if (res.status === 400) {
         console.log(`[Fetcher] Retrying Browserless with minimal endpoint and payload { url }...`);
         const fallbackEndpoint = endpoint.replace(/[?&]stealth=true/, '');
@@ -919,8 +923,58 @@ export async function fetchViaBrowserless(
       return null;
     }
 
-    const html = await res.text();
+    let html = await res.text();
     console.log(`[Fetcher] Browserless successfully rendered ${targetUrl} (${html.length} chars)`);
+
+    // If the HTML returned is still a challenge shell (Kasada ips.js or Cloudflare challenge),
+    // escalate to Browserless /function which runs an explicit waitForSelector for 15s to let the PoW solve
+    if (html.includes('window.KPSDK') || html.includes('ips.js')) {
+      console.log(`[Fetcher] Browserless /content returned Kasada challenge shell. Escalating to Browserless /function to await PoW completion...`);
+      const funcEndpoint = endpoint.replace(/\/content(\?|$)/, '/function$1');
+      try {
+        const funcRes = await fetchImpl(funcEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            code: `async ({ page, context }) => {
+              await page.goto(context.url, { waitUntil: 'domcontentloaded', timeout: 35000 });
+              try {
+                await page.waitForSelector('h1, [data-testid*="price"], .kib-product-price, [itemprop="name"]', { timeout: 15000 });
+              } catch (e) {
+                await new Promise(r => setTimeout(r, 4000));
+              }
+              return await page.content();
+            }`,
+            context: {
+              url: targetUrl,
+            },
+          }),
+          signal: AbortSignal.timeout(40000),
+        });
+
+        if (funcRes.ok) {
+          let funcHtml = await funcRes.text();
+          try {
+            const parsed = JSON.parse(funcHtml);
+            if (typeof parsed === 'string') funcHtml = parsed;
+            else if (parsed && typeof parsed.data === 'string') funcHtml = parsed.data;
+          } catch {
+            // raw html
+          }
+          if (funcHtml && !funcHtml.includes('window.KPSDK')) {
+            console.log(`[Fetcher] Browserless /function successfully bypassed challenge (${funcHtml.length} chars)`);
+            html = funcHtml;
+          }
+        } else {
+          const funcErr = await funcRes.text().catch(() => '');
+          console.warn(`[Fetcher] Browserless /function returned HTTP ${funcRes.status}: ${funcErr.slice(0, 300)}`);
+        }
+      } catch (fErr) {
+        console.warn(`[Fetcher] Browserless /function call failed:`, fErr instanceof Error ? fErr.message : fErr);
+      }
+    }
 
     const isDebug = process.env.LOGLEVEL?.toUpperCase() === 'DEBUG' || !!process.env.DEBUG;
     if (isDebug) {
