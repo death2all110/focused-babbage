@@ -236,10 +236,29 @@ export function detectStoreName(urlStr: string): string | null {
     if (host.includes('homedepot.com')) return 'Home Depot';
     if (host.includes('barnesandnoble.com')) return 'Barnes & Noble';
     if (host.includes('etsy.com')) return 'Etsy';
-    const parts = host.replace(/^www\./, '').split('.');
+    if (host.includes('ebay.com')) return 'eBay';
+    if (host.includes('newegg.com')) return 'Newegg';
+    if (host.includes('wayfair.com')) return 'Wayfair';
+    if (host.includes('nordstrom.com')) return 'Nordstrom';
+    if (host.includes('nike.com')) return 'Nike';
+    if (host.includes('apple.com')) return 'Apple';
+    if (host.includes('costco.com')) return 'Costco';
+    if (host.includes('ikea.com')) return 'IKEA';
+
+    // Universal domain parsing for any other website in the world
+    const cleanHost = host.replace(/^www\./, '');
+    const parts = cleanHost.split('.');
     if (parts.length >= 2) {
-      const domain = parts[0];
-      return domain.charAt(0).toUpperCase() + domain.slice(1);
+      let domain = parts[0];
+      if (parts.length >= 3 && (parts[parts.length - 2] === 'co' || parts[parts.length - 2] === 'com')) {
+        domain = parts[parts.length - 3];
+      } else if (parts.length >= 3 && domain === 'shop') {
+        domain = parts[1];
+      }
+      return domain
+        .replace(/[-_+]+/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim();
     }
     return null;
   } catch {
@@ -422,6 +441,18 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     name = amzTitle;
   }
 
+  // 4. Universal E-Commerce & Microdata Title / Name
+  if (!name) {
+    const domTitle = $(
+      'h1[itemprop="name"], [itemprop="name"], h1.product-title, h1.product__title, h1.product-name, h1.product_title, h1.pdp-title, .product-single__title, h1'
+    )
+      .first()
+      .text()
+      .trim();
+    if (domTitle) name = domTitle;
+  }
+
+  // Universal Price Extraction (Amazon DOM + Microdata + Meta tags + Common E-Commerce selectors)
   if (!price) {
     const amzPriceText =
       $(
@@ -429,10 +460,57 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
       )
         .first()
         .text()
-        .trim() || $('meta[property="product:price:amount"], meta[name="twitter:data1"]').attr('content');
-    price = normalizePrice(amzPriceText);
+        .trim();
+    if (amzPriceText) price = normalizePrice(amzPriceText);
   }
 
+  if (!price) {
+    const metaPrice =
+      $('meta[property="product:price:amount"]').attr('content') ||
+      $('meta[property="og:price:amount"]').attr('content') ||
+      $('meta[property="product:sale_price:amount"]').attr('content') ||
+      $('meta[itemprop="price"]').attr('content') ||
+      $('meta[name="twitter:data1"]').attr('content') ||
+      $('meta[name="price"]').attr('content');
+    if (metaPrice) price = normalizePrice(metaPrice);
+  }
+
+  if (!price) {
+    const priceSelectors = [
+      '[itemprop="price"]',
+      '[data-product-price]',
+      '[data-price]',
+      '[data-price-amount]',
+      '.price-item--sale',
+      '.price-item--regular',
+      '.price-item',
+      '.woocommerce-Price-amount',
+      '.product-price',
+      '.product__price',
+      '.price__current',
+      '.current-price',
+      '.sale-price',
+      '.special-price',
+      '.regular-price',
+      '.offer-price',
+      '.pdp-price',
+      '.product-detail__price',
+      '.price .amount',
+      '.price',
+    ];
+    for (const sel of priceSelectors) {
+      const el = $(sel).first();
+      if (el.length === 0) continue;
+      const text = el.attr('content') || el.attr('data-price') || el.text().trim();
+      const normalized = normalizePrice(text);
+      if (normalized) {
+        price = normalized;
+        break;
+      }
+    }
+  }
+
+  // Universal Image Extraction (Amazon DOM + OpenGraph/Twitter + Microdata + Common E-Commerce selectors)
   if (!image_url) {
     const prioritySelectors = [
       '#landingImage',
@@ -476,6 +554,44 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     }
   }
 
+  if (!image_url) {
+    const metaImg =
+      $('meta[property="og:image:secure_url"]').attr('content') ||
+      $('meta[property="og:image"]').attr('content') ||
+      $('meta[name="twitter:image"]').attr('content') ||
+      $('meta[name="twitter:image:src"]').attr('content') ||
+      $('link[rel="image_src"]').attr('href');
+    if (metaImg) image_url = resolveUrlMaybe(metaImg, sourceUrl);
+  }
+
+  if (!image_url) {
+    const imgSelectors = [
+      'img[data-product-image]',
+      'img[itemprop="image"]',
+      '[itemprop="image"]',
+      '.product-single__photo img',
+      '.woocommerce-product-gallery__image img',
+      '.product-image img',
+      '.product__image img',
+      '.main-image img',
+      '.featured-image img',
+      'img.product-image',
+      'img.product__image',
+      'img.featured-image',
+    ];
+    for (const sel of imgSelectors) {
+      const el = $(sel).first();
+      if (el.length === 0) continue;
+      const candidate = el.attr('src') || el.attr('data-src') || el.attr('content');
+      const resolved = resolveUrlMaybe(candidate, sourceUrl);
+      if (resolved) {
+        image_url = resolved;
+        break;
+      }
+    }
+  }
+
+  // Universal Color / Size / Model Extraction
   if (!color) {
     const amzColor = $(
       '#variation_color_name .selection, #inline-twister-expanded-dimension-text-color_name'
@@ -484,6 +600,13 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
       .text()
       .trim();
     if (amzColor) color = amzColor;
+  }
+  if (!color) {
+    const metaColor =
+      $('meta[property="product:color"]').attr('content') ||
+      $('[itemprop="color"]').first().text().trim() ||
+      $('[itemprop="color"]').attr('content');
+    if (metaColor) color = metaColor.trim();
   }
 
   if (!size) {
@@ -495,6 +618,13 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
       .trim();
     if (amzSize) size = amzSize;
   }
+  if (!size) {
+    const metaSize =
+      $('meta[property="product:size"]').attr('content') ||
+      $('[itemprop="size"]').first().text().trim() ||
+      $('[itemprop="size"]').attr('content');
+    if (metaSize) size = metaSize.trim();
+  }
 
   if (!model) {
     $('#productDetails_techSpec_section_1 tr, #productDetails_detailBullets_sections1 tr').each((_, row) => {
@@ -505,26 +635,40 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
       }
     });
   }
+  if (!model) {
+    const metaModel =
+      $('meta[property="product:retailer_item_id"]').attr('content') ||
+      $('meta[property="product:mfr_part_no"]').attr('content') ||
+      $('[itemprop="sku"]').attr('content') ||
+      $('[itemprop="sku"]').first().text().trim() ||
+      $('[itemprop="model"]').attr('content') ||
+      $('[itemprop="model"]').first().text().trim();
+    if (metaModel) model = metaModel.trim();
+  }
 
-  // 4. OpenGraph / Meta Fallbacks
+  // Meta Title Fallback
   if (!name) {
     const ogTitle =
       $('meta[property="og:title"]').attr('content') ||
       $('meta[name="twitter:title"]').attr('content') ||
       $('title').first().text();
     if (ogTitle) {
-      name = ogTitle
-        .replace(/\s*[-|:]\s*(Amazon\.com|Target|Walmart\.com|Best Buy|Kohl's).*$/i, '')
-        .replace(/^Amazon\.com\s*:\s*/i, '')
-        .trim();
+      name = ogTitle.trim();
     }
   }
 
-  if (!image_url) {
-    const ogImg =
-      $('meta[property="og:image"]').attr('content') ||
-      $('meta[name="twitter:image"]').attr('content');
-    image_url = resolveUrlMaybe(ogImg, sourceUrl);
+  // Clean trailing or leading store branding from product title
+  if (name) {
+    name = name
+      .replace(/\s*[-|:•—]\s*(Amazon\.com|Target|Walmart\.com|Best Buy|Kohl's).*$/i, '')
+      .replace(/^Amazon\.com\s*:\s*/i, '');
+    if (store_name) {
+      const escapedStore = store_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      name = name
+        .replace(new RegExp(`\\s*[-|:•—]\\s*${escapedStore}.*$`, 'i'), '')
+        .replace(new RegExp(`^${escapedStore}\\s*[-|:•—]\\s*`, 'i'), '');
+    }
+    name = name.trim();
   }
 
   // Detect robot/CAPTCHA block pages
@@ -642,13 +786,14 @@ export async function fetchProductMetadata(
           partial: true,
         };
 
-    // Fallback for Amazon bot-challenge pages: fetch lightweight link-preview view
-    if (store_name === 'Amazon' && (!result.image_url || result.partial) && !options?.fetchFn) {
+    // Universal Fallback: If primary fetch was blocked/CAPTCHA'd or returned missing image/title on ANY site,
+    // fetch with social link preview crawler (which e-commerce sites rarely block to allow previews in Messenger/WhatsApp/etc.)
+    if ((!primary.ok || result.partial || !result.image_url) && !options?.fetchFn) {
       const fallback = await fetchSafeHtml(
         targetFetchUrl,
         fetchImpl,
         {
-          'User-Agent': 'WhatsApp/2.24.12.78 A',
+          'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
         },
@@ -664,7 +809,7 @@ export async function fetchProductMetadata(
           color: result.color || fbMeta.color,
           size: result.size || fbMeta.size,
           model: result.model || fbMeta.model,
-          store_name,
+          store_name: result.store_name || fbMeta.store_name,
           partial: !(result.name || fbMeta.name) || !(result.price || fbMeta.price || result.image_url || fbMeta.image_url),
         };
       }

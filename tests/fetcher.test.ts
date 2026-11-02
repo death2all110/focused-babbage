@@ -258,4 +258,64 @@ describe('Product URL Fetcher', () => {
 
     await expect(downloadImageBlob('http://127.0.0.1:8080/secret.jpg')).rejects.toThrow();
   });
+
+  it('scrapes generic e-commerce sites (Shopify, WooCommerce, custom boutiques) with standard DOM selectors and microdata', () => {
+    const shopifyHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Handcrafted Leather Boots - Artisan Leatherworks</title>
+          <meta property="og:title" content="Handcrafted Leather Boots - Artisan Leatherworks" />
+          <meta property="og:image" content="https://cdn.shopify.com/s/files/boots.jpg" />
+          <meta property="product:price:amount" content="249.00" />
+          <meta property="product:price:currency" content="USD" />
+          <meta property="product:color" content="Cognac Brown" />
+          <meta property="product:size" content="10.5 US" />
+        </head>
+        <body>
+          <h1 class="product-title">Handcrafted Leather Boots</h1>
+          <span class="price-item--sale">$249.00</span>
+          <img class="product-featured-image" src="https://cdn.shopify.com/s/files/boots.jpg" />
+        </body>
+      </html>
+    `;
+
+    const meta = parseProductHtml(shopifyHtml, 'https://artisan-leatherworks.com/products/boots');
+    expect(meta.name).toBe('Handcrafted Leather Boots');
+    expect(meta.price).toBe('$249.00');
+    expect(meta.image_url).toBe('https://cdn.shopify.com/s/files/boots.jpg');
+    expect(meta.color).toBe('Cognac Brown');
+    expect(meta.size).toBe('10.5 US');
+    expect(meta.store_name).toBe('Artisan Leatherworks');
+    expect(meta.partial).toBe(false);
+  });
+
+  it('scrapes WooCommerce and microdata product pages and extracts foreign currency symbols', () => {
+    const wooHtml = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Ceramic Coffee Mug | Nordic Pottery</title>
+        </head>
+        <body>
+          <h1 itemprop="name" class="product_title">Ceramic Coffee Mug</h1>
+          <p class="price"><span class="woocommerce-Price-amount amount">&pound;18.50</span></p>
+          <div class="woocommerce-product-gallery__image">
+            <img src="/wp-content/uploads/mug.jpg" />
+          </div>
+          <span itemprop="color">Speckled White</span>
+          <span itemprop="sku">MUG-WHT-01</span>
+        </body>
+      </html>
+    `;
+
+    const meta = parseProductHtml(wooHtml, 'https://nordic-pottery.co.uk/shop/mug');
+    expect(meta.name).toBe('Ceramic Coffee Mug');
+    expect(meta.price).toBe('£18.50');
+    expect(meta.image_url).toBe('https://nordic-pottery.co.uk/wp-content/uploads/mug.jpg');
+    expect(meta.color).toBe('Speckled White');
+    expect(meta.model).toBe('MUG-WHT-01');
+    expect(meta.store_name).toBe('Nordic Pottery');
+    expect(meta.partial).toBe(false);
+  });
 });

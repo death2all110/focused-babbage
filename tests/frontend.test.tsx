@@ -109,7 +109,7 @@ describe('Wishlist Frontend Views', () => {
 
   it('uses dark background and light text classes on form inputs in ItemFormModal', () => {
     render(<ItemFormModal wishlistSlug="sarah-holiday" onClose={vi.fn()} onSaved={vi.fn()} />);
-    const urlInput = screen.getByPlaceholderText(/Paste product link/i);
+    const urlInput = screen.getByPlaceholderText(/Paste.*link/i);
     expect(urlInput.className).toContain('bg-slate-900');
     expect(urlInput.className).toContain('text-slate-50');
     expect(urlInput.className).not.toContain('bg-white');

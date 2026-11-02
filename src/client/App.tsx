@@ -330,7 +330,7 @@ export const App: React.FC = () => {
               onClick={(e) => {
                 e.preventDefault();
                 alert(
-                  'Drag this "+ Add to Wishlist" button to your browser Bookmarks Bar! When shopping on Amazon, Target, Walmart, etc., click it to send the item straight to your wishlist.'
+                  'Drag this "+ Add to Wishlist" button to your browser Bookmarks Bar! When viewing any product on any website, click it to add the item straight to your wishlist.'
                 );
               }}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700"

@@ -149,7 +149,7 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-              Product Link (Amazon, Target, Walmart, Best Buy, Kohl&apos;s, etc.)
+              Product Link (Any Website or Store)
             </label>
             <div className="flex gap-2">
               <input
@@ -162,7 +162,7 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
                     setTimeout(() => handleFetchUrl(pasted.trim()), 50);
                   }
                 }}
-                placeholder="Paste product link to auto-fill details..."
+                placeholder="Paste product link from any website to auto-fill..."
                 className={INPUT_CLASS}
               />
               <button
