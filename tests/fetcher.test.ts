@@ -412,6 +412,38 @@ describe('Product URL Fetcher', () => {
     expect(meta.partial).toBe(true);
   });
 
+  it('detects Harbor Freight PerimeterX CAPTCHA block and recovers slug title and CDN image', async () => {
+    const mockFetch = (async () => {
+      const pxCaptchaHtml = `
+        <!DOCTYPE html><html lang="en"><head>
+          <meta name="description" content="px-captcha">
+          <title>Access to this page has been denied</title>
+          <script src="/j4y0BbmN/captcha/captcha.js?a=c"></script>
+        </head>
+        <body>
+          <script>/* PerimeterX assignments */ window._pxAppId = 'PXj4y0BbmN';</script>
+          <div class="px-captcha-header">Before we continue...</div>
+          <div class="px-captcha-message">Press & Hold to confirm you are a human</div>
+        </body></html>
+      `;
+      return new Response(pxCaptchaHtml, {
+        status: 403,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      });
+    }) as unknown as typeof fetch;
+
+    const meta = await fetchProductMetadata(
+      'https://www.harborfreight.com/3500-lb-a-frame-weather-resistant-electric-trailer-jack-with-drop-leg-58203.html',
+      { fetchFn: mockFetch }
+    );
+
+    expect(meta.name).toBe('3500 Lb A Frame Weather Resistant Electric Trailer Jack With Drop Leg 58203');
+    expect(meta.price).toBeNull();
+    expect(meta.image_url).toBe('https://www.harborfreight.com/media/catalog/product/cache/87bb6fe55719635edbf9f739e6fd104e/5/8/58203_W3.jpg');
+    expect(meta.store_name).toBe('Harbor Freight');
+    expect(meta.partial).toBe(true);
+  });
+
   it('uses Browserless container to render full HTML including price and images when configured', async () => {
     const mockFetch = (async (input: RequestInfo | URL) => {
       const urlStr = String(input);

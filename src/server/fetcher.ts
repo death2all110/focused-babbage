@@ -776,8 +776,16 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     html.includes('Akamai 403 WAF') ||
     html.includes('No treats beyond this point') ||
     html.includes('Page error: 403') ||
+    html.includes('px-captcha') ||
+    html.includes('_pxAppId') ||
+    html.includes('_pxUuid') ||
+    html.includes('PerimeterX') ||
+    html.includes('Press & Hold') ||
+    html.includes('Human verification challenge') ||
     lowerName === 'robot or human?' ||
     lowerName.includes('access denied') ||
+    lowerName.includes('access to this page has been denied') ||
+    lowerName.includes('denied') ||
     lowerName.includes('sorry! something went wrong') ||
     lowerName.includes('just a moment...') ||
     lowerName.includes('attention required! | cloudflare') ||
@@ -936,14 +944,19 @@ export async function fetchViaBrowserless(
     let html = await res.text();
     console.log(`[Fetcher] Browserless successfully rendered ${targetUrl} (${html.length} chars)`);
 
-    // If the HTML returned is still a challenge shell (Kasada ips.js, Akamai 403 WAF, or Cloudflare challenge),
+    // If the HTML returned is still a challenge shell (Kasada ips.js, Akamai 403 WAF, PerimeterX, or Cloudflare challenge),
     // escalate to Browserless /function which runs an explicit waitForSelector for 15s to let the PoW solve
     const isChallengeOrWaf =
       html.includes('window.KPSDK') ||
       html.includes('ips.js') ||
       html.includes('Akamai 403 WAF') ||
       html.includes('No treats beyond this point') ||
-      html.includes('403 error');
+      html.includes('403 error') ||
+      html.includes('px-captcha') ||
+      html.includes('_pxAppId') ||
+      html.includes('PerimeterX') ||
+      html.includes('Press & Hold') ||
+      html.includes('Access to this page has been denied');
 
     if (isChallengeOrWaf) {
       console.log(`[Fetcher] Browserless /content returned bot challenge or WAF page. Escalating to Browserless /function with realistic client fingerprint...`);
@@ -991,7 +1004,10 @@ export async function fetchViaBrowserless(
             !funcHtml ||
             funcHtml.includes('window.KPSDK') ||
             funcHtml.includes('No treats beyond this point') ||
-            funcHtml.includes('403 error');
+            funcHtml.includes('403 error') ||
+            funcHtml.includes('px-captcha') ||
+            funcHtml.includes('Access to this page has been denied') ||
+            funcHtml.includes('Press & Hold');
           if (!stillBlocked) {
             console.log(`[Fetcher] Browserless /function successfully bypassed challenge (${funcHtml.length} chars)`);
             html = funcHtml;
@@ -1161,6 +1177,19 @@ export async function fetchProductMetadata(
       }
     }
 
+    // Harbor Freight direct image fallback: Harbor Freight blocks HTML scraping via PerimeterX 403,
+    // but their Fastly/Magento media CDN serves the full product image via /media/catalog/product/cache/...
+    if (!result.image_url && store_name === 'Harbor Freight') {
+      const hfMatch =
+        safeUrl.pathname.match(/-(\d{4,6})(?:\.html|\/?$)/) ||
+        safeUrl.pathname.match(/\/(\d{4,6})(?:\.html|\/?$)/);
+      if (hfMatch) {
+        const sku = hfMatch[1];
+        result.image_url = `https://www.harborfreight.com/media/catalog/product/cache/87bb6fe55719635edbf9f739e6fd104e/${sku[0]}/${sku[1]}/${sku}_W3.jpg`;
+        console.log(`[Fetcher] Applied Harbor Freight CDN image URL for SKU ${sku}: ${result.image_url}`);
+      }
+    }
+
     console.log(
       `[Fetcher] Extracted: name="${result.name}", price="${result.price}", image_url="${result.image_url}", partial=${result.partial}`
     );
@@ -1179,6 +1208,15 @@ export async function fetchProductMetadata(
         safeUrl.pathname.match(/\/(\d+)(?:\.html|\/?$)/);
       if (chewyMatch) {
         fallbackImg = `https://image.chewy.com/is/image/catalog/${chewyMatch[1]}_MAIN._AC_SL600_V1_.jpg`;
+      }
+    }
+    if (!fallbackImg && store_name === 'Harbor Freight') {
+      const hfMatch =
+        safeUrl.pathname.match(/-(\d{4,6})(?:\.html|\/?$)/) ||
+        safeUrl.pathname.match(/\/(\d{4,6})(?:\.html|\/?$)/);
+      if (hfMatch) {
+        const sku = hfMatch[1];
+        fallbackImg = `https://www.harborfreight.com/media/catalog/product/cache/87bb6fe55719635edbf9f739e6fd104e/${sku[0]}/${sku[1]}/${sku}_W3.jpg`;
       }
     }
     const fallbackResult = {
