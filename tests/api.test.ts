@@ -124,4 +124,44 @@ describe('Wishlist API & OpenGraph', () => {
     const itemRow = db.getItemImageBlob(itemId);
     expect(itemRow).toBeUndefined();
   });
+
+  it('allows editing an item retaining local /api/items/:id/image and preserves BLOB', async () => {
+    const reg = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'editor@example.com', password: 'password123', display_name: 'Editor' });
+    const ownerCookie = reg.headers['set-cookie'];
+
+    const listsRes = await request(app).get('/api/wishlists').set('Cookie', ownerCookie);
+    const slug = listsRes.body.wishlists[0].slug;
+
+    // Add item and attach a local BLOB image
+    const addRes = await request(app)
+      .post(`/api/wishlists/${slug}/items`)
+      .set('Cookie', ownerCookie)
+      .send({ name: 'Vinyl Record', price: '$29.99' });
+    expect(addRes.status).toBe(201);
+    const itemId = addRes.body.item.id;
+
+    const sampleJpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+    db.setItemImageBlob(itemId, sampleJpg, 'image/jpeg');
+
+    // Update the item passing the local image URL (as sent by Edit Wishlist Item modal)
+    const patchRes = await request(app)
+      .patch(`/api/wishlists/${slug}/items/${itemId}`)
+      .set('Cookie', ownerCookie)
+      .send({
+        name: 'Vinyl Record - Special Edition',
+        price: '$34.99',
+        image_url: `/api/items/${itemId}/image`,
+      });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.item.name).toBe('Vinyl Record - Special Edition');
+    expect(patchRes.body.item.price).toBe('$34.99');
+    expect(patchRes.body.item.image_url).toBe(`/api/items/${itemId}/image`);
+
+    // Verify the BLOB is still accessible and unchanged
+    const imgRes = await request(app).get(`/api/items/${itemId}/image`);
+    expect(imgRes.status).toBe(200);
+    expect(new Uint8Array(imgRes.body)).toEqual(sampleJpg);
+  });
 });

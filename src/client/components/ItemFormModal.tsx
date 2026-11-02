@@ -47,8 +47,12 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const handleFetchUrl = async (targetUrl?: string) => {
-    const toFetch = (targetUrl ?? url).trim();
+    let toFetch = (targetUrl ?? url).trim();
     if (!toFetch) return;
+    if (!/^https?:\/\//i.test(toFetch) && !toFetch.startsWith('/')) {
+      toFetch = 'https://' + toFetch;
+      setUrl(toFetch);
+    }
     setFetching(true);
     setFetchNotice(null);
     setError(null);
@@ -102,13 +106,18 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
       const finalSection =
         selectedSection === '__new__' ? newSectionName.trim() : selectedSection.trim();
 
+      let cleanUrl = url.trim();
+      if (cleanUrl && !/^https?:\/\//i.test(cleanUrl) && !cleanUrl.startsWith('/')) {
+        cleanUrl = 'https://' + cleanUrl;
+      }
+
       const res = await fetch(endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: name.trim(),
           section: finalSection || null,
-          url: url.trim() || null,
+          url: cleanUrl || null,
           price: price.trim() || null,
           image_url: imageUrl.trim() || null,
           color: color.trim() || null,
@@ -153,13 +162,16 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
             </label>
             <div className="flex gap-2">
               <input
-                type="url"
+                type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 onPaste={(e) => {
                   const pasted = e.clipboardData.getData('text');
-                  if (pasted && /^https?:\/\//i.test(pasted.trim()) && !name) {
-                    setTimeout(() => handleFetchUrl(pasted.trim()), 50);
+                  if (pasted && !name) {
+                    const cleanPasted = pasted.trim();
+                    if (/^https?:\/\//i.test(cleanPasted) || /^[a-z0-9-]+(\.[a-z0-9-]+)+/i.test(cleanPasted)) {
+                      setTimeout(() => handleFetchUrl(cleanPasted), 50);
+                    }
                   }
                 }}
                 placeholder="Paste product link from any website to auto-fill..."
@@ -294,10 +306,10 @@ export const ItemFormModal: React.FC<ItemFormModalProps> = ({
             </label>
             <div className="flex gap-3 items-center">
               <input
-                type="url"
+                type="text"
                 value={imageUrl}
                 onChange={(e) => setImageUrl(e.target.value)}
-                placeholder="https://..."
+                placeholder="https://... or /api/items/..."
                 className={INPUT_CLASS}
               />
               {imageUrl && (

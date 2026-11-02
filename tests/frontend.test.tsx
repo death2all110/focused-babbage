@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { WishlistView } from '../src/client/components/WishlistView';
 import { ItemFormModal } from '../src/client/components/ItemFormModal';
@@ -187,5 +187,62 @@ describe('Wishlist Frontend Views', () => {
     const confirmBtn = screen.getByRole('button', { name: /Yes, Delete Wishlist/i });
     fireEvent.click(confirmBtn);
     expect(onDeleteWishlist).toHaveBeenCalledWith('sarah-holiday');
+  });
+
+  it('renders Photo URL with type="text" allowing relative /api/items/:id/image URLs without HTML validation errors', async () => {
+    const onSaved = vi.fn();
+    const existingItem = {
+      id: 11,
+      wishlist_id: 1,
+      name: 'Take Me Back To Eden: Vinyl',
+      section: null,
+      url: 'https://www.amazon.com/dp/B0B...',
+      price: '$34.72',
+      image_url: '/api/items/11/image',
+      color: null,
+      size: null,
+      model: null,
+      priority: 0,
+      is_reserved: false,
+      reserved_by_name: null,
+      reserved_at: null,
+      created_at: '2026-11-01',
+      updated_at: '2026-11-01',
+    };
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ item: existingItem }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <ItemFormModal
+        wishlistSlug="sarah-holiday"
+        initialItem={existingItem}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+      />
+    );
+
+    expect(screen.getByRole('heading', { name: 'Edit Wishlist Item' })).toBeInTheDocument();
+
+    const photoInput = screen.getByPlaceholderText(/https:\/\/... or \/api\/items\//i) as HTMLInputElement;
+    expect(photoInput).toBeInTheDocument();
+    expect(photoInput.type).toBe('text');
+    expect(photoInput.value).toBe('/api/items/11/image');
+
+    // Submit the form
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/wishlists/sarah-holiday/items/11',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: expect.stringContaining('"/api/items/11/image"'),
+      })
+    );
   });
 });

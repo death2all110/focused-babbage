@@ -462,6 +462,16 @@ export function createDatabase(dbPath?: string): AppDatabase {
           wishlistId
         );
 
+      if (input.image_url === null) {
+        sqlite
+          .prepare(`
+            UPDATE wishlist_items
+            SET image_blob = NULL, image_mime = NULL
+            WHERE id = ? AND wishlist_id = ?
+          `)
+          .run(itemId, wishlistId);
+      }
+
       const updated = sqlite
         .prepare('SELECT * FROM wishlist_items WHERE id = ?')
         .get(itemId) as Record<string, unknown>;

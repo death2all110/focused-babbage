@@ -59,7 +59,7 @@ function sanitizeImageUrlInput(raw: unknown): string | null | undefined {
   }
   const trimmed = raw.trim();
   if (!trimmed) return null;
-  if (/^\/api\/items\/\d+\/image$/.test(trimmed)) {
+  if (/^\/api\/items\/\d+\/image(\?.*)?$/.test(trimmed)) {
     return trimmed;
   }
   return sanitizeHttpUrl(trimmed);
