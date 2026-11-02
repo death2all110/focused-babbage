@@ -806,12 +806,21 @@ async function fetchSafeHtml(
   }
 
   if (!response || !response.ok) {
+    const status = response ? response.status : 'No response';
+    const isKasada = response?.headers.get('x-kpsdk-ct');
+    if (isKasada) {
+      console.warn(`[Fetcher] ${currentUrl} -> HTTP 429 (Kasada Bot Challenge detected)`);
+    } else {
+      console.warn(`[Fetcher] ${currentUrl} -> HTTP ${status}`);
+    }
     return { ok: false, html: '', finalUrl: currentUrl };
   }
   const bytes = await readResponseBytesWithLimit(response, MAX_HTML_BYTES);
   if (!bytes) {
+    console.warn(`[Fetcher] ${currentUrl} exceeded max response size (${MAX_HTML_BYTES} bytes)`);
     return { ok: false, html: '', finalUrl: currentUrl };
   }
+  console.log(`[Fetcher] ${currentUrl} -> HTTP ${response.status} (received ${bytes.length} bytes)`);
   return { ok: true, html: new TextDecoder().decode(bytes), finalUrl: currentUrl };
 }
 
@@ -825,6 +834,8 @@ export async function fetchProductMetadata(
   const store_name = detectStoreName(normalizedUrl);
   const fetchImpl = options?.fetchFn || fetch;
   const checkLiveDns = !options?.fetchFn;
+
+  console.log(`[Fetcher] Fetching product: ${normalizedUrl} (Store: ${store_name || 'Generic'})`);
 
   try {
     const primaryHeaders: Record<string, string> =
@@ -864,6 +875,7 @@ export async function fetchProductMetadata(
     // Universal Fallback: If primary fetch was blocked/CAPTCHA'd or returned missing image/title/price on ANY site,
     // fetch with social link preview crawler (which e-commerce sites rarely block to allow previews in Messenger/WhatsApp/etc.)
     if ((!primary.ok || result.partial || !result.image_url || !result.price) && !options?.fetchFn) {
+      console.log(`[Fetcher] Retrying ${normalizedUrl} with social crawler (facebookexternalhit)...`);
       const fallback = await fetchSafeHtml(
         targetFetchUrl,
         fetchImpl,
@@ -900,6 +912,21 @@ export async function fetchProductMetadata(
       }
     }
 
+    // Chewy direct image fallback: Chewy blocks HTML scraping via Kasada 429,
+    // but their Akamai Image CDN serves the full product image via /catalog/{productId}_MAIN._AC_SL600_V1_.jpg
+    if (!result.image_url && store_name === 'Chewy') {
+      const chewyMatch =
+        safeUrl.pathname.match(/\/(?:dp|product|gp)\/(\d+)/i) ||
+        safeUrl.pathname.match(/\/(\d+)(?:\.html|\/?$)/);
+      if (chewyMatch) {
+        result.image_url = `https://image.chewy.com/is/image/catalog/${chewyMatch[1]}_MAIN._AC_SL600_V1_.jpg`;
+        console.log(`[Fetcher] Applied Chewy CDN image URL for product ID ${chewyMatch[1]}: ${result.image_url}`);
+      }
+    }
+
+    console.log(
+      `[Fetcher] Extracted: name="${result.name}", price="${result.price}", image_url="${result.image_url}", partial=${result.partial}`
+    );
     return result;
   } catch (err) {
     if (err instanceof UnsafeUrlError) {
@@ -908,17 +935,30 @@ export async function fetchProductMetadata(
     const eanMatch =
       safeUrl.searchParams.get('ean')?.match(/^(97[89]\d{10})$/) ||
       normalizedUrl.match(/\b(97[89]\d{10})\b/);
-    return {
+    let fallbackImg = eanMatch ? `https://covers.openlibrary.org/b/isbn/${eanMatch[1]}-L.jpg?default=false` : null;
+    if (!fallbackImg && store_name === 'Chewy') {
+      const chewyMatch =
+        safeUrl.pathname.match(/\/(?:dp|product|gp)\/(\d+)/i) ||
+        safeUrl.pathname.match(/\/(\d+)(?:\.html|\/?$)/);
+      if (chewyMatch) {
+        fallbackImg = `https://image.chewy.com/is/image/catalog/${chewyMatch[1]}_MAIN._AC_SL600_V1_.jpg`;
+      }
+    }
+    const fallbackResult = {
       url: normalizedUrl,
       name: extractSlugFallbackTitle(normalizedUrl),
       price: null,
-      image_url: eanMatch ? `https://covers.openlibrary.org/b/isbn/${eanMatch[1]}-L.jpg?default=false` : null,
+      image_url: fallbackImg,
       color: null,
       size: null,
       model: null,
       store_name,
       partial: true,
     };
+    console.log(
+      `[Fetcher] Fetch failed or blocked. Fallback result: name="${fallbackResult.name}", image_url="${fallbackResult.image_url}"`
+    );
+    return fallbackResult;
   }
 }
 

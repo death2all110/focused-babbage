@@ -510,10 +510,13 @@ export function createApp(options?: {
       res.status(400).json({ error: 'Product URL is required.' });
       return;
     }
+    const targetUrl = url.trim();
+    console.log(`[API] POST /api/fetch-url: "${targetUrl}"`);
     try {
-      const metadata = await fetchMetadata(url.trim());
+      const metadata = await fetchMetadata(targetUrl);
       res.json(metadata);
     } catch (err) {
+      console.error(`[API] Failed to fetch metadata for "${targetUrl}":`, err instanceof Error ? err.message : err);
       if (err instanceof UnsafeUrlError) {
         res.status(400).json({ error: err.message });
         return;

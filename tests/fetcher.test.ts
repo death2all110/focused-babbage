@@ -353,4 +353,28 @@ describe('Product URL Fetcher', () => {
     expect(meta.store_name).toBe('Chewy');
     expect(meta.partial).toBe(false);
   });
+
+  it('resolves Chewy product image and slug title via Chewy CDN fallback when HTML fetch is blocked by bot challenge (429)', async () => {
+    const mockFetch = (async () => {
+      return new Response(
+        '<!DOCTYPE html><html><head></head><body><script>window.KPSDK={};</script></body></html>',
+        {
+          status: 429,
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'x-kpsdk-ct': 'mock-kasada-token',
+          },
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    const meta = await fetchProductMetadata(
+      'https://www.chewy.com/bark-animal-squeakers-snacks-multi/dp/1382534',
+      { fetchFn: mockFetch }
+    );
+
+    expect(meta.name).toBe('Bark Animal Squeakers Snacks Multi');
+    expect(meta.image_url).toBe('https://image.chewy.com/is/image/catalog/1382534_MAIN._AC_SL600_V1_.jpg');
+    expect(meta.store_name).toBe('Chewy');
+  });
 });
