@@ -753,6 +753,11 @@ export function parseProductHtml(html: string, sourceUrl: string): FetchedProduc
     lowerName === 'robot or human?' ||
     lowerName.includes('access denied') ||
     lowerName.includes('sorry! something went wrong') ||
+    lowerName.includes('just a moment...') ||
+    lowerName.includes('attention required! | cloudflare') ||
+    lowerName.includes('security check') ||
+    lowerName.includes('shieldsquare') ||
+    lowerName.includes('perimeterx') ||
     lowerName === 'amazon.com';
 
   if (isBlockedTitle) {
@@ -834,9 +839,10 @@ export async function fetchViaBrowserless(
     const raw = browserlessUrl.trim();
     if (!raw) return null;
     const parsed = new URL(raw);
-    let endpoint = parsed.pathname.endsWith('/content')
-      ? raw
-      : `${parsed.origin}/content`;
+    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+    let endpoint = cleanPath.endsWith('/content')
+      ? `${parsed.origin}${cleanPath}`
+      : `${parsed.origin}${cleanPath}/content`;
     if (token) {
       const sep = endpoint.includes('?') ? '&' : '?';
       endpoint += `${sep}token=${encodeURIComponent(token)}`;

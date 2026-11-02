@@ -418,4 +418,46 @@ describe('Product URL Fetcher', () => {
     expect(meta.image_url).toBe('https://image.chewy.com/is/image/catalog/1382534_MAIN._AC_SL600_V1_.jpg');
     expect(meta.partial).toBe(false);
   });
+
+  it('triggers Browserless as universal fallback for ANY arbitrary website when blocked by Cloudflare/PerimeterX or 429', async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const urlStr = String(input);
+      if (urlStr.includes('arbitrary-boutique.com')) {
+        // Direct request returns Cloudflare challenge or 429
+        return new Response('<html><title>Just a moment...</title><body>Cloudflare Challenge</body></html>', {
+          status: 403,
+          headers: { 'cf-mitigated': 'challenge' },
+        });
+      }
+      if (urlStr.includes('/content')) {
+        // Browserless solves the challenge and renders the boutique's product page
+        const renderedHtml = `
+          <!DOCTYPE html>
+          <html>
+            <body>
+              <h1 class="product-title">Handmade Ceramic Vase</h1>
+              <span class="product-price">$68.00</span>
+              <img class="product-image" src="https://arbitrary-boutique.com/img/vase.jpg" />
+            </body>
+          </html>
+        `;
+        return new Response(renderedHtml, { status: 200, headers: { 'content-type': 'text/html' } });
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const meta = await fetchProductMetadata(
+      'https://arbitrary-boutique.com/products/ceramic-vase',
+      {
+        fetchFn: mockFetch,
+        browserlessUrl: 'http://192.168.1.100:3000',
+      }
+    );
+
+    expect(meta.name).toBe('Handmade Ceramic Vase');
+    expect(meta.price).toBe('$68.00');
+    expect(meta.image_url).toBe('https://arbitrary-boutique.com/img/vase.jpg');
+    expect(meta.store_name).toBe('Arbitrary Boutique');
+    expect(meta.partial).toBe(false);
+  });
 });
