@@ -638,4 +638,18 @@ describe('Product URL Fetcher', () => {
       delete process.env.USER_AGENT;
     }
   });
+
+  it('gracefully handles HTTP 429 from Browserless by backing off and returning null', async () => {
+    const mockFetch = (async () => {
+      return new Response('Too Many Requests', { status: 429 });
+    }) as unknown as typeof fetch;
+
+    const res = await fetchViaBrowserless(
+      'https://example.com/busy-item',
+      'https://browserless.example.com',
+      'token',
+      mockFetch
+    );
+    expect(res).toBeNull();
+  });
 });

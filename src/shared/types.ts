@@ -33,6 +33,7 @@ export interface WishlistItem {
   is_reserved: boolean;
   reserved_by_name: string | null;
   reserved_at: string | null;
+  needs_enrichment?: boolean;
   created_at: string;
   updated_at: string;
 }

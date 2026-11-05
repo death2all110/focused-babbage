@@ -51,8 +51,31 @@ export interface AppDatabase {
       priority?: number;
       is_reserved?: boolean;
       reserved_by_name?: string | null;
+      needs_enrichment?: boolean;
     }
   ): WishlistItem;
+  findItemByUrl(wishlistId: number, url: string): WishlistItem | undefined;
+  findItemByName(wishlistId: number, name: string): WishlistItem | undefined;
+  upsertItem(
+    wishlistId: number,
+    input: {
+      name: string;
+      section?: string | null;
+      url?: string | null;
+      price?: string | null;
+      image_url?: string | null;
+      color?: string | null;
+      size?: string | null;
+      model?: string | null;
+      priority?: number;
+      is_reserved?: boolean;
+      reserved_by_name?: string | null;
+      needs_enrichment?: boolean;
+    }
+  ): WishlistItem;
+  getPendingEnrichmentItems(wishlistId?: number): WishlistItem[];
+  clearNeedsEnrichment(itemId: number): boolean;
+  clearWishlistItems(wishlistId: number): boolean;
   setItemImageBlob(itemId: number, blob: Uint8Array, mimeType: string): WishlistItem | undefined;
   getItemImageBlob(itemId: number): { blob: Uint8Array; mimeType: string } | undefined;
   updateItem(
@@ -126,6 +149,7 @@ function mapItemRow(row: Record<string, unknown>, hideReservation = false): Wish
     is_reserved: hideReservation ? false : Boolean(row.is_reserved),
     reserved_by_name: hideReservation ? null : row.reserved_by_name != null ? String(row.reserved_by_name) : null,
     reserved_at: hideReservation ? null : row.reserved_at != null ? String(row.reserved_at) : null,
+    needs_enrichment: Boolean(row.needs_enrichment),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -190,6 +214,7 @@ export function createDatabase(dbPath?: string): AppDatabase {
       is_reserved INTEGER NOT NULL DEFAULT 0,
       reserved_by_name TEXT,
       reserved_at TEXT,
+      needs_enrichment INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -206,6 +231,10 @@ export function createDatabase(dbPath?: string): AppDatabase {
   }
   if (!existingCols.has('image_mime')) {
     sqlite.exec('ALTER TABLE wishlist_items ADD COLUMN image_mime TEXT;');
+  }
+  if (!existingCols.has('needs_enrichment')) {
+    sqlite.exec('ALTER TABLE wishlist_items ADD COLUMN needs_enrichment INTEGER NOT NULL DEFAULT 0;');
+    sqlite.exec('UPDATE wishlist_items SET needs_enrichment = 0 WHERE needs_enrichment IS NULL;');
   }
 
   const db: AppDatabase = {
@@ -371,13 +400,14 @@ export function createDatabase(dbPath?: string): AppDatabase {
       const reservedByName = isReserved ? (input.reserved_by_name?.trim() || 'Reserved') : null;
       const reservedAt = isReserved ? new Date().toISOString() : null;
       const sectionVal = input.section?.trim() || null;
+      const needsEnrichment = input.needs_enrichment ? 1 : 0;
 
       const res = sqlite
         .prepare(`
           INSERT INTO wishlist_items (
             wishlist_id, name, section, url, price, image_url, color, size, model, priority,
-            is_reserved, reserved_by_name, reserved_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            is_reserved, reserved_by_name, reserved_at, needs_enrichment
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           wishlistId,
@@ -392,13 +422,118 @@ export function createDatabase(dbPath?: string): AppDatabase {
           input.priority ?? 0,
           isReserved,
           reservedByName,
-          reservedAt
+          reservedAt,
+          needsEnrichment
         );
 
       const row = sqlite
         .prepare('SELECT * FROM wishlist_items WHERE id = ?')
         .get(Number(res.lastInsertRowid)) as Record<string, unknown>;
       return mapItemRow(row, false);
+    },
+
+    findItemByUrl(wishlistId, url) {
+      if (!url || !url.trim()) return undefined;
+      const row = sqlite
+        .prepare('SELECT * FROM wishlist_items WHERE wishlist_id = ? AND url = ?')
+        .get(wishlistId, url.trim()) as Record<string, unknown> | undefined;
+      return row ? mapItemRow(row, false) : undefined;
+    },
+
+    findItemByName(wishlistId, name) {
+      if (!name || !name.trim()) return undefined;
+      const row = sqlite
+        .prepare('SELECT * FROM wishlist_items WHERE wishlist_id = ? AND LOWER(TRIM(name)) = LOWER(?)')
+        .get(wishlistId, name.trim()) as Record<string, unknown> | undefined;
+      return row ? mapItemRow(row, false) : undefined;
+    },
+
+    upsertItem(wishlistId, input) {
+      let existing: WishlistItem | undefined;
+      if (input.url && input.url.trim()) {
+        existing = this.findItemByUrl(wishlistId, input.url.trim());
+      }
+      if (!existing && input.name && input.name.trim()) {
+        existing = this.findItemByName(wishlistId, input.name.trim());
+      }
+
+      if (!existing) {
+        return this.addItem(wishlistId, input);
+      }
+
+      const sectionVal = input.section !== undefined ? (input.section?.trim() || null) : existing.section;
+      const priceVal = input.price !== undefined ? (input.price?.trim() || null) : existing.price;
+      const imageUrlVal = input.image_url !== undefined ? (input.image_url?.trim() || null) : existing.image_url;
+      const colorVal = input.color !== undefined ? (input.color?.trim() || null) : existing.color;
+      const sizeVal = input.size !== undefined ? (input.size?.trim() || null) : existing.size;
+      const modelVal = input.model !== undefined ? (input.model?.trim() || null) : existing.model;
+      const priorityVal = input.priority !== undefined ? input.priority : existing.priority;
+      const needsEnrichmentVal =
+        input.needs_enrichment !== undefined
+          ? (input.needs_enrichment ? 1 : 0)
+          : (existing.needs_enrichment ? 1 : 0);
+
+      let isReserved = existing.is_reserved ? 1 : 0;
+      let reservedByName = existing.reserved_by_name;
+      let reservedAt = existing.reserved_at;
+      if (!existing.is_reserved && input.is_reserved) {
+        isReserved = 1;
+        reservedByName = input.reserved_by_name?.trim() || 'Reserved (Imported)';
+        reservedAt = new Date().toISOString();
+      }
+
+      sqlite
+        .prepare(`
+          UPDATE wishlist_items
+          SET name = ?, section = ?, url = ?, price = ?, image_url = ?, color = ?, size = ?, model = ?, priority = ?,
+              is_reserved = ?, reserved_by_name = ?, reserved_at = ?, needs_enrichment = ?, updated_at = datetime('now')
+          WHERE id = ? AND wishlist_id = ?
+        `)
+        .run(
+          input.name.trim(),
+          sectionVal,
+          input.url ?? existing.url,
+          priceVal,
+          imageUrlVal,
+          colorVal,
+          sizeVal,
+          modelVal,
+          priorityVal,
+          isReserved,
+          reservedByName,
+          reservedAt,
+          needsEnrichmentVal,
+          existing.id,
+          wishlistId
+        );
+
+      const updated = sqlite
+        .prepare('SELECT * FROM wishlist_items WHERE id = ?')
+        .get(existing.id) as Record<string, unknown>;
+      return mapItemRow(updated, false);
+    },
+
+    getPendingEnrichmentItems(wishlistId) {
+      const rows = wishlistId
+        ? (sqlite
+            .prepare('SELECT * FROM wishlist_items WHERE wishlist_id = ? AND needs_enrichment = 1 ORDER BY id ASC')
+            .all(wishlistId) as Array<Record<string, unknown>>)
+        : (sqlite
+            .prepare('SELECT * FROM wishlist_items WHERE needs_enrichment = 1 ORDER BY id ASC')
+            .all() as Array<Record<string, unknown>>);
+      return rows.map((r) => mapItemRow(r, false));
+    },
+
+    clearNeedsEnrichment(itemId) {
+      const res = sqlite
+        .prepare("UPDATE wishlist_items SET needs_enrichment = 0, updated_at = datetime('now') WHERE id = ?")
+        .run(itemId);
+      return Number(res.changes) > 0;
+    },
+
+    clearWishlistItems(wishlistId) {
+      const res = sqlite.prepare('DELETE FROM wishlist_items WHERE wishlist_id = ?').run(wishlistId);
+      return Number(res.changes) > 0;
     },
 
     setItemImageBlob(itemId, blob, mimeType) {

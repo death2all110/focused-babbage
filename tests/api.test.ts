@@ -164,4 +164,35 @@ describe('Wishlist API & OpenGraph', () => {
     expect(imgRes.status).toBe(200);
     expect(new Uint8Array(imgRes.body)).toEqual(sampleJpg);
   });
+
+  it('allows owner to clear all items from a wishlist via DELETE /api/wishlists/:slug/items', async () => {
+    const reg = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'clear@example.com', password: 'password123', display_name: 'Clear' });
+    const ownerCookie = reg.headers['set-cookie'];
+
+    const listsRes = await request(app).get('/api/wishlists').set('Cookie', ownerCookie);
+    const slug = listsRes.body.wishlists[0].slug;
+
+    await request(app)
+      .post(`/api/wishlists/${slug}/items`)
+      .set('Cookie', ownerCookie)
+      .send({ name: 'Item 1' });
+    await request(app)
+      .post(`/api/wishlists/${slug}/items`)
+      .set('Cookie', ownerCookie)
+      .send({ name: 'Item 2' });
+
+    let view = await request(app).get(`/api/wishlists/${slug}`).set('Cookie', ownerCookie);
+    expect(view.body.items.length).toBe(2);
+
+    const clearRes = await request(app)
+      .delete(`/api/wishlists/${slug}/items`)
+      .set('Cookie', ownerCookie);
+    expect(clearRes.status).toBe(200);
+    expect(clearRes.body.ok).toBe(true);
+
+    view = await request(app).get(`/api/wishlists/${slug}`).set('Cookie', ownerCookie);
+    expect(view.body.items.length).toBe(0);
+  });
 });

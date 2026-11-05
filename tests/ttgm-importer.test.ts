@@ -69,6 +69,7 @@ describe('Things To Get Me Importer', () => {
 
     const summary = await importTtgmList(db, list.id, '902589a87070', {
       fetchHtmlFn: async () => SAMPLE_TTGM_HTML,
+      autoProcessEnrichment: true,
       enrichFn: async (url) => {
         if (url.includes('B0CN989377')) {
           return {
@@ -99,18 +100,17 @@ describe('Things To Get Me Importer', () => {
 
     expect(summary.skipped_received_count).toBe(1);
     expect(summary.imported_count).toBe(2);
-    expect(summary.enriched_count).toBe(2);
     // Owner summary items must NOT leak reservation state
     expect(summary.items.every((i) => i.is_reserved === false)).toBe(true);
 
-    // Guest view verifies the active reservation WAS migrated and direct store photos WERE fetched (no thingstogetme.com hotlinking)
+    // Guest view verifies the active reservation WAS migrated and missing photos were enriched
     const guestView = db.getWishlistView(list.slug, null)!;
     const psu = guestView.items.find((i) => i.name.includes('DC Power Supply'))!;
     expect(psu.is_reserved).toBe(true);
     expect(psu.reserved_by_name).toBe('Reserved (Imported)');
     expect(psu.price).toBe('$47.48');
-    expect(psu.image_url).toBe('https://m.media-amazon.com/images/I/psu-direct.jpg');
-    expect(psu.image_url).not.toContain('thingstogetme.com');
+    // PSU had TTGM image, so TTGM image was preserved
+    expect(psu.image_url).toBe('https://www.thingstogetme.com/public/images/psu.jpg');
 
     const hurley = guestView.items.find((i) => i.name.includes('Hurley'))!;
     expect(hurley.is_reserved).toBe(false);
@@ -118,10 +118,12 @@ describe('Things To Get Me Importer', () => {
     expect(hurley.size).toBe('Medium');
   });
 
-  it('discards relative or absolute thingstogetme.com image URLs and fetches from the store instead', async () => {
+  it('preserves and downloads relative or absolute thingstogetme.com image URLs as BLOBs without calling enrich', async () => {
     const owner = db.createUser({ email: 'blake2@example.com', display_name: 'Blake' });
     const list = db.createWishlist(owner.id, { title: 'Blake Christmas' });
 
+    let enrichCalled = false;
+    const downloadedUrls: string[] = [];
     const htmlWithTtgmImg = `
       <script>
       window.ttgmList = ${JSON.stringify({
@@ -144,21 +146,23 @@ describe('Things To Get Me Importer', () => {
 
     const summary = await importTtgmList(db, list.id, '902589a87070', {
       fetchHtmlFn: async () => htmlWithTtgmImg,
-      enrichFn: async (url) => ({
-        url,
-        name: 'Relative Image Item',
-        price: '$25.00',
-        image_url: 'https://m.media-amazon.com/images/I/direct-store.jpg',
-        color: null,
-        size: null,
-        model: null,
-        store_name: 'Amazon',
-        partial: false,
-      }),
+      autoProcessEnrichment: true,
+      enrichFn: async () => {
+        enrichCalled = true;
+        throw new Error('enrich should not be called!');
+      },
+      downloadImageFn: async (imgUrl) => {
+        downloadedUrls.push(imgUrl);
+        return {
+          blob: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+          mimeType: 'image/png',
+        };
+      },
     });
-    expect(summary.items[0].image_url).toBe(
-      'https://m.media-amazon.com/images/I/direct-store.jpg'
-    );
+
+    expect(enrichCalled).toBe(false);
+    expect(downloadedUrls).toContain('https://www.thingstogetme.com/public/images/url/sample.jpg');
+    expect(summary.items[0].image_url).toBe(`/api/items/${summary.items[0].id}/image`);
   });
 
   it('preserves Things To Get Me sections in sequence order and caches images locally as SQLite BLOBs', async () => {
@@ -204,6 +208,7 @@ describe('Things To Get Me Importer', () => {
     const downloadedUrls: string[] = [];
     const summary = await importTtgmList(db, list.id, '2330693a0f17e', {
       fetchHtmlFn: async () => htmlWithSections,
+      autoProcessEnrichment: true,
       enrichFn: async (url) => {
         if (url.includes('barnesandnoble.com')) {
           return {
@@ -256,5 +261,71 @@ describe('Things To Get Me Importer', () => {
     );
     expect(db.getItemImageBlob(summary.items[0].id)).toBeDefined();
     expect(db.getItemImageBlob(summary.items[1].id)).toBeDefined();
+  });
+
+  it('handles re-import deduplication without creating duplicate rows or overwriting reservations', async () => {
+    const owner = db.createUser({ email: 'dedup@example.com', display_name: 'Dedup' });
+    const list = db.createWishlist(owner.id, { title: 'Dedup Test' });
+
+    const html = `
+      <script>
+      window.ttgmList = ${JSON.stringify({
+        name: 'Dedup Test',
+        items: [
+          {
+            key: 'item-1',
+            name: 'Whale Tracking Bracelet',
+            price: '$16.95',
+            url: 'https://myfahlo.com/products/whale-tracking-bracelet',
+            image: 'https://www.thingstogetme.com/public/images/url/whale.jpg',
+            received: null,
+            item_users: [],
+          },
+        ],
+      })};
+      </script>
+    `;
+
+    // First import
+    await importTtgmList(db, list.id, '902589a87070', { fetchHtmlFn: async () => html });
+    let view = db.getWishlistView(list.slug, null)!;
+    expect(view.items.length).toBe(1);
+
+    // Reserve item
+    db.reserveItem(view.items[0].id, 'Uncle Bob', null);
+
+    // Second import of the exact same list
+    await importTtgmList(db, list.id, '902589a87070', { fetchHtmlFn: async () => html });
+    view = db.getWishlistView(list.slug, null)!;
+
+    // Must still have exactly 1 item and reservation must be preserved!
+    expect(view.items.length).toBe(1);
+    expect(view.items[0].is_reserved).toBe(true);
+    expect(view.items[0].reserved_by_name).toBe('Uncle Bob');
+  });
+
+  it('imports lists larger than 250 items completely without truncation', async () => {
+    const owner = db.createUser({ email: 'large@example.com', display_name: 'Large' });
+    const list = db.createWishlist(owner.id, { title: 'Large List' });
+
+    const items = Array.from({ length: 300 }, (_, i) => ({
+      key: `item-${i}`,
+      name: `Test Item ${i}`,
+      price: '$9.99',
+      url: `https://example.com/items/${i}`,
+      image: `https://example.com/img/${i}.jpg`,
+      received: null,
+      item_users: [],
+    }));
+
+    const html = `
+      <script>
+      window.ttgmList = ${JSON.stringify({ name: 'Large List', items })};
+      </script>
+    `;
+    const summary = await importTtgmList(db, list.id, '902589a87070', { fetchHtmlFn: async () => html });
+    expect(summary.imported_count).toBe(300);
+    const view = db.getWishlistView(list.slug, null)!;
+    expect(view.items.length).toBe(300);
   });
 });

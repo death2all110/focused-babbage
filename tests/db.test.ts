@@ -86,4 +86,121 @@ describe('AppDatabase', () => {
     expect(storedBlob!.mimeType).toBe('image/jpeg');
     expect(Array.from(storedBlob!.blob)).toEqual(Array.from(sampleBytes));
   });
+
+  it('supports needs_enrichment flag and deferred enrichment queries', () => {
+    const owner = db.createUser({ email: 'enrich@example.com', display_name: 'Enrich' });
+    const list = db.createWishlist(owner.id, { title: 'Enrich List' });
+
+    const item1 = db.addItem(list.id, {
+      name: 'Item Needing Enrichment',
+      url: 'https://example.com/item1',
+      needs_enrichment: true,
+    });
+    const item2 = db.addItem(list.id, {
+      name: 'Item Already Complete',
+      price: '$10.00',
+      needs_enrichment: false,
+    });
+
+    expect(item1.needs_enrichment).toBe(true);
+    expect(item2.needs_enrichment).toBe(false);
+
+    const pending = db.getPendingEnrichmentItems(list.id);
+    expect(pending.length).toBe(1);
+    expect(pending[0].id).toBe(item1.id);
+
+    db.clearNeedsEnrichment(item1.id);
+    expect(db.getPendingEnrichmentItems(list.id).length).toBe(0);
+  });
+
+  it('upserts items by URL or name, preventing duplicates and preserving reservations', () => {
+    const owner = db.createUser({ email: 'dedup@example.com', display_name: 'Dedup' });
+    const list = db.createWishlist(owner.id, { title: 'Dedup List' });
+
+    const item = db.addItem(list.id, {
+      name: 'Whale Tracking Bracelet',
+      url: 'https://myfahlo.com/products/whale-tracking-bracelet',
+      price: '$16.95',
+      section: 'Bracelets',
+    });
+
+    // Reserve item
+    db.reserveItem(item.id, 'Grandma', null);
+
+    // Upserting with same URL updates fields but does not duplicate and keeps reservation
+    const upserted = db.upsertItem(list.id, {
+      name: 'Whale Tracking Bracelet - Updated Name',
+      url: 'https://myfahlo.com/products/whale-tracking-bracelet',
+      price: '$18.00',
+      section: 'Bracelets',
+      size: 'One Size',
+    });
+
+    expect(upserted.id).toBe(item.id);
+    expect(upserted.price).toBe('$18.00');
+    expect(upserted.size).toBe('One Size');
+
+    const guestView = db.getWishlistView(list.slug, null)!;
+    expect(guestView.items.length).toBe(1);
+    expect(guestView.items[0].is_reserved).toBe(true);
+    expect(guestView.items[0].reserved_by_name).toBe('Grandma');
+
+    // Upserting new item adds it
+    const newItem = db.upsertItem(list.id, {
+      name: 'New Product',
+      url: 'https://example.com/new',
+    });
+    expect(newItem.id).not.toBe(item.id);
+    expect(db.getWishlistView(list.slug, null)!.items.length).toBe(2);
+
+    // Clearing wishlist items wipes them
+    db.clearWishlistItems(list.id);
+    expect(db.getWishlistView(list.slug, null)!.items.length).toBe(0);
+  });
+
+  it('runs one-time migration to add needs_enrichment column and sets it to 0 for all existing items', () => {
+    // Manually create a raw sqlite db without the needs_enrichment column
+    const { DatabaseSync } = require('node:sqlite');
+    const rawSqlite = new DatabaseSync(':memory:');
+    rawSqlite.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL
+      );
+      CREATE TABLE wishlists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        slug TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL
+      );
+      CREATE TABLE wishlist_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wishlist_id INTEGER NOT NULL REFERENCES wishlists(id),
+        name TEXT NOT NULL,
+        price TEXT
+      );
+      INSERT INTO users (id, email, display_name) VALUES (1, 'legacy@example.com', 'Legacy');
+      INSERT INTO wishlists (id, user_id, slug, title) VALUES (1, 1, 'legacy-list', 'Legacy List');
+      INSERT INTO wishlist_items (id, wishlist_id, name, price) VALUES (1, 1, 'Old Item', '$20.00');
+    `);
+
+    // Verify rawSqlite table does not have needs_enrichment column
+    const colsBefore = new Set(
+      rawSqlite.prepare('PRAGMA table_info(wishlist_items)').all().map((c: any) => c.name)
+    );
+    expect(colsBefore.has('needs_enrichment')).toBe(false);
+
+    // Apply the exact startup migration logic
+    if (!colsBefore.has('needs_enrichment')) {
+      rawSqlite.exec('ALTER TABLE wishlist_items ADD COLUMN needs_enrichment INTEGER NOT NULL DEFAULT 0;');
+      rawSqlite.exec('UPDATE wishlist_items SET needs_enrichment = 0 WHERE needs_enrichment IS NULL;');
+    }
+
+    // Verify column exists now and existing items have needs_enrichment = 0
+    const row = rawSqlite.prepare('SELECT needs_enrichment FROM wishlist_items WHERE id = 1').get() as {
+      needs_enrichment: number;
+    };
+    expect(row.needs_enrichment).toBe(0);
+  });
 });

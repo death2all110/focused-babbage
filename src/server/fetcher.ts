@@ -868,7 +868,38 @@ async function fetchSafeHtml(
   return { ok: true, html: new TextDecoder().decode(bytes), finalUrl: currentUrl };
 }
 
+let browserlessQueueTail: Promise<void> = Promise.resolve();
+let lastBrowserlessTime = 0;
+const BROWSERLESS_MIN_INTERVAL_MS = process.env.NODE_ENV === 'test' ? 50 : 1000;
+
 export async function fetchViaBrowserless(
+  targetUrl: string,
+  browserlessUrl: string,
+  token?: string | null,
+  fetchImpl: typeof fetch = fetch
+): Promise<string | null> {
+  const prevQueue = browserlessQueueTail;
+  let release: () => void = () => {};
+  browserlessQueueTail = new Promise<void>((r) => {
+    release = r;
+  });
+
+  try {
+    await prevQueue.catch(() => {});
+    const now = Date.now();
+    const elapsed = now - lastBrowserlessTime;
+    if (elapsed < BROWSERLESS_MIN_INTERVAL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, BROWSERLESS_MIN_INTERVAL_MS - elapsed));
+    }
+    lastBrowserlessTime = Date.now();
+
+    return await executeBrowserlessRequest(targetUrl, browserlessUrl, token, fetchImpl);
+  } finally {
+    release();
+  }
+}
+
+async function executeBrowserlessRequest(
   targetUrl: string,
   browserlessUrl: string,
   token?: string | null,
@@ -914,6 +945,11 @@ export async function fetchViaBrowserless(
       }),
       signal: AbortSignal.timeout(30000),
     });
+
+    if (res.status === 429) {
+      console.warn(`[Fetcher] Browserless returned HTTP 429 (rate-limited). Giving Browserless breathing room and backing off.`);
+      return null;
+    }
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');

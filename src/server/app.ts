@@ -12,7 +12,7 @@ import {
   sanitizeHttpUrl,
   UnsafeUrlError,
 } from './fetcher.js';
-import { importTtgmList } from './ttgm-importer.js';
+import { importTtgmList, processPendingEnrichments } from './ttgm-importer.js';
 
 function escapeHtml(str: string): string {
   return str
@@ -451,6 +451,25 @@ export function createApp(options?: {
     res.json({ ok: true });
   });
 
+  // Clear all items from a wishlist
+  app.delete('/api/wishlists/:slug/items', async (req, res) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    const existing = db.getWishlistBySlug(req.params.slug);
+    if (!existing) {
+      res.status(404).json({ error: 'Wishlist not found.' });
+      return;
+    }
+    if (existing.user_id !== req.user.id) {
+      res.status(403).json({ error: 'Only the wishlist owner can clear items.' });
+      return;
+    }
+    db.clearWishlistItems(existing.id);
+    res.json({ ok: true });
+  });
+
   // Guest / Visitor reservation endpoints (no login required!)
   app.post('/api/items/:itemId/reserve', reserveRateLimiter, (req, res) => {
     const itemId = Number(req.params.itemId);
@@ -547,6 +566,10 @@ export function createApp(options?: {
     }
     try {
       const summary = await importTtgm(db, existing.id, urlOrCode.trim());
+      // Kick off background enrichment queue asynchronously without blocking response
+      processPendingEnrichments(db, existing.id).catch((err) => {
+        console.warn(`[Enrichment] Background worker error for wishlist ${existing.id}:`, err);
+      });
       res.json(summary);
     } catch (err) {
       res.status(400).json({

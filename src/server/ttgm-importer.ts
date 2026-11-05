@@ -11,7 +11,7 @@ import {
 } from './fetcher.js';
 
 const MAX_TTGM_HTML_BYTES = 5 * 1024 * 1024;
-const MAX_TTGM_IMPORT_ITEMS = 250;
+const MAX_TTGM_IMPORT_ITEMS = 5000;
 
 export interface TtgmRawSection {
   key?: string;
@@ -128,7 +128,18 @@ export function parseTtgmHtml(html: string): { title: string; items: TtgmRawItem
   }
 
   const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
-  const indexed = rawItems.map((it, idx) => {
+  const seenKeys = new Set<string>();
+  const uniqueRawItems: TtgmRawItem[] = [];
+  for (const it of rawItems) {
+    const key = it.key?.trim();
+    if (key) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
+    uniqueRawItems.push(it);
+  }
+
+  const indexed = uniqueRawItems.map((it, idx) => {
     const sec = it.section ? sectionInfo.get(it.section) : undefined;
     return {
       item: {
@@ -163,6 +174,7 @@ export async function importTtgmList(
     fetchHtmlFn?: (url: string) => Promise<string>;
     enrichFn?: typeof fetchProductMetadata;
     downloadImageFn?: typeof downloadImageBlob;
+    autoProcessEnrichment?: boolean;
   }
 ): Promise<TtgmImportSummary> {
   const targetUrl = resolveTtgmUrl(urlOrCode);
@@ -204,7 +216,6 @@ export async function importTtgmList(
       return new TextDecoder().decode(bytes);
     });
 
-  const enrich = options?.enrichFn || fetchProductMetadata;
   // In real runtime (when neither fetchHtmlFn nor enrichFn is mocked, or when downloadImageFn is explicitly passed), cache images as SQLite BLOBs
   const downloadImg =
     options?.downloadImageFn ??
@@ -239,7 +250,7 @@ export async function importTtgmList(
     model: string | null;
     priority: number;
     activeReservation: boolean;
-    didEnrich: boolean;
+    needsEnrichment: boolean;
   }
 
   const prepared: PreparedImportItem[] = new Array(activeRawItems.length);
@@ -261,19 +272,12 @@ export async function importTtgmList(
       }
       let itemPrice = normalizePrice(raw.price);
       let itemImage: string | null = null;
-      let ttgmFallbackImageUrl: string | null = null;
 
       if (raw.image?.trim()) {
         try {
           const resolved = new URL(raw.image.trim(), targetUrl);
           if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
-            const imgHost = resolved.hostname.toLowerCase();
-            if (imgHost === 'thingstogetme.com' || imgHost.endsWith('.thingstogetme.com')) {
-              // Never hotlink thingstogetme.com; only use for one-time local BLOB download if store scraping fails
-              ttgmFallbackImageUrl = resolved.toString();
-            } else {
-              itemImage = resolved.toString();
-            }
+            itemImage = resolved.toString();
           }
         } catch {
           itemImage = null;
@@ -284,52 +288,20 @@ export async function importTtgmList(
       let itemColor = noteFields.color;
       let itemSize = noteFields.size;
       let itemModel = noteFields.model;
-      let didEnrich = false;
 
-      // Auto-fetch missing details if the item has a URL but is missing direct store image or price
-      if (itemUrl && (!itemImage || !itemPrice)) {
-        try {
-          const meta = await enrich(itemUrl);
-          if (!itemImage && meta.image_url) {
-            itemImage = meta.image_url;
-            didEnrich = true;
-          }
-          if (!itemPrice && meta.price) {
-            itemPrice = meta.price;
-            didEnrich = true;
-          }
-          if (!itemColor && meta.color) {
-            itemColor = meta.color;
-            didEnrich = true;
-          }
-          if (!itemSize && meta.size) {
-            itemSize = meta.size;
-            didEnrich = true;
-          }
-          if (!itemModel && meta.model) {
-            itemModel = meta.model;
-            didEnrich = true;
-          }
-        } catch {
-          // Ignore enrichment errors and keep existing item data
-        }
-      }
-
-      // Download image into local SQLite BLOB cache so we never hammer 3rd-party servers or hotlink TTGM
+      // Download image directly into local SQLite BLOB cache
       let cachedBlob: { blob: Uint8Array; mimeType: string } | null = null;
-      if (downloadImg) {
-        const sourceToDownload = itemImage || ttgmFallbackImageUrl;
-        if (sourceToDownload) {
-          try {
-            cachedBlob = await downloadImg(sourceToDownload);
-            if (!itemImage && cachedBlob) {
-              didEnrich = true;
-            }
-          } catch {
-            cachedBlob = null;
-          }
+      if (downloadImg && itemImage) {
+        try {
+          cachedBlob = await downloadImg(itemImage);
+        } catch {
+          cachedBlob = null;
         }
       }
+
+      const hasImage = Boolean(cachedBlob || itemImage);
+      const hasPrice = Boolean(itemPrice);
+      const needsEnrichment = Boolean(itemUrl && (!hasImage || !hasPrice));
 
       const activeReservation = Array.isArray(raw.item_users) && raw.item_users.length > 0;
       const cleanName = (raw.name || 'Untitled Item')
@@ -349,7 +321,7 @@ export async function importTtgmList(
         model: itemModel ? itemModel.slice(0, 500) : null,
         priority: Number(raw.priority ?? 0),
         activeReservation,
-        didEnrich,
+        needsEnrichment,
       };
     }
   }
@@ -360,8 +332,7 @@ export async function importTtgmList(
 
   const importedOwnerSafeItems: WishlistItem[] = [];
   for (const p of prepared) {
-    if (p.didEnrich) enriched_count++;
-    let created = db.addItem(wishlistId, {
+    let created = db.upsertItem(wishlistId, {
       name: p.name,
       section: p.section,
       url: p.url,
@@ -373,6 +344,7 @@ export async function importTtgmList(
       priority: p.priority,
       is_reserved: p.activeReservation,
       reserved_by_name: p.activeReservation ? 'Reserved (Imported)' : null,
+      needs_enrichment: p.needsEnrichment,
     });
 
     if (p.cachedBlob) {
@@ -388,10 +360,93 @@ export async function importTtgmList(
     });
   }
 
+  if (options?.autoProcessEnrichment) {
+    const enrichResult = await processPendingEnrichments(db, wishlistId, {
+      enrichFn: options.enrichFn,
+      downloadImageFn: options.downloadImageFn,
+    });
+    enriched_count = enrichResult.succeeded;
+    const refreshedWishlist = db.getWishlistById(wishlistId);
+    const refreshedView = refreshedWishlist
+      ? db.getWishlistView(refreshedWishlist.slug, refreshedWishlist.user_id)
+      : undefined;
+    const refreshedItems = refreshedView?.items || [];
+    return {
+      imported_count: refreshedItems.length,
+      skipped_received_count,
+      enriched_count,
+      items: refreshedItems,
+    };
+  }
+
   return {
     imported_count: importedOwnerSafeItems.length,
     skipped_received_count,
     enriched_count,
     items: importedOwnerSafeItems,
   };
+}
+
+export async function processPendingEnrichments(
+  db: AppDatabase,
+  wishlistId?: number,
+  options?: {
+    enrichFn?: typeof fetchProductMetadata;
+    downloadImageFn?: typeof downloadImageBlob;
+    delayBetweenItemsMs?: number;
+  }
+): Promise<{ processed: number; succeeded: number; failed: number }> {
+  const enrich = options?.enrichFn || fetchProductMetadata;
+  const downloadImg = options?.downloadImageFn || downloadImageBlob;
+  const delayMs = options?.delayBetweenItemsMs ?? (process.env.NODE_ENV === 'test' ? 0 : 500);
+
+  const pendingItems = db.getPendingEnrichmentItems(wishlistId);
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const item of pendingItems) {
+    if (!item.url) {
+      db.clearNeedsEnrichment(item.id);
+      continue;
+    }
+
+    try {
+      const meta = await enrich(item.url);
+      let nextImage = item.image_url;
+      let cachedBlob: { blob: Uint8Array; mimeType: string } | null = null;
+
+      if (!item.image_url && meta.image_url) {
+        nextImage = meta.image_url;
+        try {
+          cachedBlob = await downloadImg(meta.image_url);
+        } catch {
+          cachedBlob = null;
+        }
+      }
+
+      db.updateItem(item.id, item.wishlist_id, {
+        price: item.price || meta.price,
+        image_url: nextImage,
+        color: item.color || meta.color,
+        size: item.size || meta.size,
+        model: item.model || meta.model,
+      });
+
+      if (cachedBlob) {
+        db.setItemImageBlob(item.id, cachedBlob.blob, cachedBlob.mimeType);
+      }
+      succeeded++;
+    } catch {
+      failed++;
+    } finally {
+      // Unconditionally clear the flag as instructed by the user
+      db.clearNeedsEnrichment(item.id);
+    }
+
+    if (delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+
+  return { processed: pendingItems.length, succeeded, failed };
 }
