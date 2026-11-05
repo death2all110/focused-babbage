@@ -6,6 +6,7 @@ import {
   fetchProductMetadata,
   downloadImageBlob,
   fetchViaBrowserless,
+  fetchViaTtgmGrab,
 } from '../src/server/fetcher';
 
 describe('Product URL Fetcher', () => {
@@ -651,5 +652,115 @@ describe('Product URL Fetcher', () => {
       mockFetch
     );
     expect(res).toBeNull();
+  });
+
+  it('queries TTGM grab.json with origin, referer, and context headers and returns parsed metadata', async () => {
+    let capturedUrl = '';
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody: any = null;
+
+    const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = String(input);
+      capturedUrl = urlStr;
+      capturedHeaders = (init?.headers as Record<string, string>) || {};
+      if (init?.body) {
+        capturedBody = JSON.parse(String(init.body));
+      }
+      return new Response(
+        JSON.stringify({
+          success: 'OK',
+          name: 'Frisco Heavy Duty Cat & Dog Gate',
+          price: '$49.99',
+          images: ['https://image.chewy.com/catalog/gate.jpg'],
+          url: 'https://www.chewy.com/dp/12345',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }
+      );
+    }) as unknown as typeof fetch;
+
+    const meta = await fetchViaTtgmGrab('https://www.chewy.com/dp/12345', mockFetch);
+    expect(capturedUrl).toBe('https://www.thingstogetme.com/api/app/grab.json');
+    expect(capturedHeaders['Origin']).toBe('https://www.thingstogetme.com');
+    expect(capturedHeaders['Referer']).toBe('https://www.thingstogetme.com/');
+    expect(capturedHeaders['Content-Type']).toBe('application/json');
+    expect(capturedBody).toEqual({
+      url: 'https://www.chewy.com/dp/12345',
+      _context: 'web',
+    });
+    expect(meta).toEqual({
+      name: 'Frisco Heavy Duty Cat & Dog Gate',
+      price: '$49.99',
+      image_url: 'https://image.chewy.com/catalog/gate.jpg',
+      store_name: 'Chewy',
+    });
+  });
+
+  it('handles TTGM grab API failures and non-OK responses gracefully', async () => {
+    const errorFetch = (async () => {
+      return new Response(JSON.stringify({ error: 'Not allowed' }), { status: 403 });
+    }) as unknown as typeof fetch;
+
+    const res = await fetchViaTtgmGrab('https://www.chewy.com/dp/12345', errorFetch);
+    expect(res).toBeNull();
+  });
+
+  it('uses TTGM grab as fast intermediate fallback when primary scrape is blocked', async () => {
+    const mockFetch = (async (input: RequestInfo | URL) => {
+      const urlStr = String(input);
+      if (urlStr.includes('chewy.com')) {
+        // Direct request is blocked by Kasada 429
+        return new Response('Blocked by Kasada', { status: 429 });
+      }
+      if (urlStr.includes('thingstogetme.com/api/app/grab.json')) {
+        // TTGM Grab succeeds
+        return new Response(
+          JSON.stringify({
+            success: 'OK',
+            name: 'BARK Animal Squeakers Dog Toy',
+            price: '10.99',
+            images: ['https://image.chewy.com/catalog/toy.jpg'],
+            url: 'https://www.chewy.com/dp/1382534',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      return new Response('Not found', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const meta = await fetchProductMetadata('https://www.chewy.com/dp/1382534', {
+      fetchFn: mockFetch,
+    });
+
+    expect(meta.name).toBe('BARK Animal Squeakers Dog Toy');
+    expect(meta.price).toBe('$10.99');
+    expect(meta.image_url).toBe('https://image.chewy.com/catalog/toy.jpg');
+    expect(meta.store_name).toBe('Chewy');
+    expect(meta.partial).toBe(false);
+  });
+
+  it('skips TTGM grab when ENABLE_TTGM_FALLBACK=false', async () => {
+    process.env.ENABLE_TTGM_FALLBACK = 'false';
+    try {
+      let ttgmCalled = false;
+      const mockFetch = (async (input: RequestInfo | URL) => {
+        const urlStr = String(input);
+        if (urlStr.includes('thingstogetme.com')) {
+          ttgmCalled = true;
+          return new Response(JSON.stringify({ success: 'OK' }), { status: 200 });
+        }
+        return new Response('Blocked', { status: 429 });
+      }) as unknown as typeof fetch;
+
+      await fetchProductMetadata('https://www.chewy.com/bark-toy/dp/1382534', {
+        fetchFn: mockFetch,
+      });
+
+      expect(ttgmCalled).toBe(false);
+    } finally {
+      delete process.env.ENABLE_TTGM_FALLBACK;
+    }
   });
 });

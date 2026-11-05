@@ -1071,6 +1071,127 @@ async function executeBrowserlessRequest(
   }
 }
 
+let cachedTtgmCookie: { cookie: string; expiresAt: number } | null = null;
+
+export function resetCachedTtgmCookieForTest(): void {
+  cachedTtgmCookie = null;
+}
+
+export async function getOrFetchTtgmCookie(fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  if (cachedTtgmCookie && Date.now() < cachedTtgmCookie.expiresAt) {
+    return cachedTtgmCookie.cookie;
+  }
+  try {
+    const res = await fetchImpl('https://www.thingstogetme.com', {
+      method: 'GET',
+      headers: {
+        'User-Agent':
+          process.env.USER_AGENT ||
+          'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+      signal: AbortSignal.timeout(4000),
+    });
+    let setCookieHeader: string | null = null;
+    if (typeof (res.headers as any)?.getSetCookie === 'function') {
+      const cookies = (res.headers as any).getSetCookie();
+      setCookieHeader = cookies.join('; ');
+    } else {
+      setCookieHeader = res.headers.get('set-cookie');
+    }
+    if (setCookieHeader) {
+      const match = setCookieHeader.match(/\b(ttgm=[^;,\s]+)/);
+      if (match) {
+        cachedTtgmCookie = {
+          cookie: match[1],
+          expiresAt: Date.now() + 12 * 60 * 60 * 1000,
+        };
+        return match[1];
+      }
+    }
+  } catch {
+    // Proceed without cookie if acquisition fails
+  }
+  return null;
+}
+
+export async function fetchViaTtgmGrab(
+  targetUrl: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = 6000
+): Promise<Partial<FetchedProductMetadata> | null> {
+  try {
+    const cookie = await getOrFetchTtgmCookie(fetchImpl);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Origin: 'https://www.thingstogetme.com',
+      Referer: 'https://www.thingstogetme.com/',
+      'User-Agent':
+        process.env.USER_AGENT ||
+        'Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0',
+    };
+    if (cookie) {
+      headers['Cookie'] = cookie;
+    }
+
+    const res = await fetchImpl('https://www.thingstogetme.com/api/app/grab.json', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        url: targetUrl,
+        _context: 'web',
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!res.ok) {
+      return null;
+    }
+
+    const data = (await res.json()) as any;
+    if (!data || data.success !== 'OK') {
+      return null;
+    }
+
+    const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : undefined;
+    const price =
+      typeof data.price === 'string' && data.price.trim() ? normalizePrice(data.price.trim()) : null;
+
+    let imageUrl: string | null = null;
+    if (Array.isArray(data.images) && data.images.length > 0 && typeof data.images[0] === 'string') {
+      const rawImg = data.images[0].trim();
+      if (rawImg.startsWith('//')) {
+        imageUrl = `https:${rawImg}`;
+      } else if (rawImg.startsWith('http://') || rawImg.startsWith('https://')) {
+        imageUrl = rawImg;
+      } else {
+        try {
+          imageUrl = new URL(rawImg, targetUrl).toString();
+        } catch {
+          imageUrl = null;
+        }
+      }
+    }
+
+    if (!name && !price && !imageUrl) {
+      return null;
+    }
+
+    return {
+      name,
+      price,
+      image_url: imageUrl,
+      store_name: detectStoreName(targetUrl) || null,
+    };
+  } catch (err) {
+    const isDebug = process.env.LOGLEVEL?.toUpperCase() === 'DEBUG' || !!process.env.DEBUG;
+    if (isDebug) {
+      console.warn(`[Fetcher] TTGM Grab request failed:`, err instanceof Error ? err.message : err);
+    }
+    return null;
+  }
+}
+
 export async function fetchProductMetadata(
   url: string,
   options?: {
@@ -1127,12 +1248,42 @@ export async function fetchProductMetadata(
           partial: true,
         };
 
+    // Things To Get Me (TTGM) Grab Fallback: If primary fetch was blocked (e.g. 429/403) or missing price/image,
+    // and TTGM fallback is enabled (ENABLE_TTGM_FALLBACK !== 'false'),
+    // query TTGM's grab endpoint first. It provides high-speed metadata (<500ms)
+    // for major retailers (Chewy, Amazon, Target, etc.), bypassing bot challenges and avoiding heavy Browserless rendering.
+    if (
+      (!primary.ok || result.partial || !result.image_url || !result.price) &&
+      process.env.ENABLE_TTGM_FALLBACK !== 'false'
+    ) {
+      console.log(`[Fetcher] Retrying ${normalizedUrl} with Things To Get Me grab fallback...`);
+      const ttgmMeta = await fetchViaTtgmGrab(targetFetchUrl, fetchImpl);
+      if (ttgmMeta && (ttgmMeta.name || ttgmMeta.price || ttgmMeta.image_url)) {
+        result = {
+          url: normalizedUrl,
+          name: (!result.partial && result.name) || ttgmMeta.name || result.name,
+          price: ttgmMeta.price || result.price,
+          image_url: ttgmMeta.image_url || result.image_url,
+          color: result.color || ttgmMeta.color || null,
+          size: result.size || ttgmMeta.size || null,
+          model: result.model || ttgmMeta.model || null,
+          store_name: ttgmMeta.store_name || result.store_name || store_name,
+          partial:
+            !(ttgmMeta.name || result.name) ||
+            !(ttgmMeta.price || result.price || ttgmMeta.image_url || result.image_url),
+        };
+        console.log(
+          `[Fetcher] TTGM grab fallback extracted: name="${result.name}", price="${result.price}", image_url="${result.image_url}", partial=${result.partial}`
+        );
+      }
+    }
+
     const browserlessUrl = options?.browserlessUrl || process.env.BROWSERLESS_URL;
     const browserlessToken = options?.browserlessToken || process.env.BROWSERLESS_TOKEN;
 
     // Browserless Headless Chrome Fallback: If primary fetch was blocked (429/403) or missing fields,
     // and a Browserless container is configured, render the full page in headless Chromium (executing JS & bot challenges).
-    if ((!primary.ok || result.partial || !result.image_url || !result.price) && browserlessUrl) {
+    if ((result.partial || !result.image_url || !result.price) && browserlessUrl) {
       const renderedHtml = await fetchViaBrowserless(
         targetFetchUrl,
         browserlessUrl,
@@ -1163,7 +1314,7 @@ export async function fetchProductMetadata(
 
     // Universal Fallback: If primary fetch was blocked/CAPTCHA'd or returned missing image/title/price on ANY site,
     // fetch with social link preview crawler (which e-commerce sites rarely block to allow previews in Messenger/WhatsApp/etc.)
-    if ((!primary.ok || result.partial || !result.image_url || !result.price) && !options?.fetchFn) {
+    if ((result.partial || !result.image_url || !result.price) && !options?.fetchFn) {
       console.log(`[Fetcher] Retrying ${normalizedUrl} with social crawler (facebookexternalhit)...`);
       const fallback = await fetchSafeHtml(
         targetFetchUrl,
