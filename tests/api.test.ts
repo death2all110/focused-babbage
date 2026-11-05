@@ -195,4 +195,56 @@ describe('Wishlist API & OpenGraph', () => {
     view = await request(app).get(`/api/wishlists/${slug}`).set('Cookie', ownerCookie);
     expect(view.body.items.length).toBe(0);
   });
+
+  it('allows owner to rename a wishlist and update description via PATCH /api/wishlists/:slug', async () => {
+    const reg = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'owner@example.com', password: 'password123', display_name: 'Owner' });
+    const ownerCookie = reg.headers['set-cookie'];
+
+    const listsRes = await request(app).get('/api/wishlists').set('Cookie', ownerCookie);
+    const slug = listsRes.body.wishlists[0].slug;
+
+    // Update title and description
+    const patchRes = await request(app)
+      .patch(`/api/wishlists/${slug}`)
+      .set('Cookie', ownerCookie)
+      .send({
+        title: "Owner's Updated Birthday Wishlist",
+        description: 'New wishlist description for the family',
+      });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.wishlist.title).toBe("Owner's Updated Birthday Wishlist");
+    expect(patchRes.body.wishlist.description).toBe('New wishlist description for the family');
+
+    // Verify GET reflects the changes
+    const viewRes = await request(app).get(`/api/wishlists/${slug}`);
+    expect(viewRes.status).toBe(200);
+    expect(viewRes.body.wishlist.title).toBe("Owner's Updated Birthday Wishlist");
+    expect(viewRes.body.wishlist.description).toBe('New wishlist description for the family');
+
+    // Reject empty title
+    const badRes = await request(app)
+      .patch(`/api/wishlists/${slug}`)
+      .set('Cookie', ownerCookie)
+      .send({ title: '   ' });
+    expect(badRes.status).toBe(400);
+
+    // Reject unauthenticated request
+    const unauthRes = await request(app)
+      .patch(`/api/wishlists/${slug}`)
+      .send({ title: 'Hacked Title' });
+    expect(unauthRes.status).toBe(401);
+
+    // Reject another user trying to rename this list
+    const otherReg = await request(app)
+      .post('/api/auth/register')
+      .send({ email: 'other@example.com', password: 'password123', display_name: 'Other' });
+    const otherCookie = otherReg.headers['set-cookie'];
+    const forbiddenRes = await request(app)
+      .patch(`/api/wishlists/${slug}`)
+      .set('Cookie', otherCookie)
+      .send({ title: 'Impostor Title' });
+    expect(forbiddenRes.status).toBe(403);
+  });
 });

@@ -235,6 +235,28 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleRenameWishlist = async (slug: string, title: string, description: string) => {
+    const res = await fetch(`/api/wishlists/${slug}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error || 'Failed to update wishlist.');
+    }
+    setToast('Wishlist updated.');
+    await Promise.all([
+      loadWishlist(slug),
+      fetch('/api/wishlists')
+        .then((r) => (r.ok ? r.json() : { wishlists: [] }))
+        .then((d: { wishlists?: Wishlist[] }) => setMyWishlists(d.wishlists || [])),
+      fetch('/api/family')
+        .then((r) => (r.ok ? r.json() : { wishlists: [] }))
+        .then((d: { wishlists?: Wishlist[] }) => setFamilyWishlists(d.wishlists || [])),
+    ]);
+  };
+
   const handleCreateWishlist = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newListTitle.trim()) return;
@@ -365,6 +387,7 @@ export const App: React.FC = () => {
             }}
             onDeleteItem={handleDeleteItem}
             onDeleteWishlist={handleDeleteWishlist}
+            onRenameWishlist={handleRenameWishlist}
             onOpenImport={() => setShowImportModal(true)}
           />
         ) : (

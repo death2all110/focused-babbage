@@ -245,4 +245,55 @@ describe('Wishlist Frontend Views', () => {
       })
     );
   });
+
+  it('does not render edit wishlist pencil button for visitors (is_owner: false)', () => {
+    render(<WishlistView data={sampleVisitorData} currentUser={null} onRefresh={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Edit wishlist/i })).not.toBeInTheDocument();
+  });
+
+  it('renders edit wishlist pencil button for owner, opens Edit Wishlist modal, and saves updated details', async () => {
+    const ownerData: WishlistViewResponse = {
+      ...sampleVisitorData,
+      is_owner: true,
+      items: [],
+    };
+    const onRenameWishlist = vi.fn().mockResolvedValue(undefined);
+    render(
+      <WishlistView
+        data={ownerData}
+        currentUser={{
+          id: 10,
+          email: 's@e.com',
+          display_name: 'Sarah',
+          avatar_url: null,
+          created_at: '',
+        }}
+        onRefresh={vi.fn()}
+        onRenameWishlist={onRenameWishlist}
+      />
+    );
+
+    const editBtn = screen.getByRole('button', { name: /Edit wishlist/i });
+    expect(editBtn).toBeInTheDocument();
+
+    // Clicking opens the modal
+    fireEvent.click(editBtn);
+    expect(screen.getByRole('heading', { name: /Edit Wishlist/i })).toBeInTheDocument();
+
+    const titleInput = screen.getByDisplayValue("Sarah's Holiday Wishlist");
+    const descInput = screen.getByDisplayValue('Sizes and links inside!');
+
+    fireEvent.change(titleInput, { target: { value: "Sarah's Christmas 2026 List" } });
+    fireEvent.change(descInput, { target: { value: 'Updated clothing sizes and ideas' } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+    });
+
+    expect(onRenameWishlist).toHaveBeenCalledWith(
+      'sarah-holiday',
+      "Sarah's Christmas 2026 List",
+      'Updated clothing sizes and ideas'
+    );
+  });
 });

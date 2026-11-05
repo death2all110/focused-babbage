@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import type { User, WishlistItem, WishlistViewResponse } from '../../shared/types.js';
+import { EditWishlistModal } from './EditWishlistModal.js';
 
 interface WishlistViewProps {
   data: WishlistViewResponse;
@@ -23,6 +24,7 @@ interface WishlistViewProps {
   onDeleteItem?: (itemId: number) => void;
   onOpenImport?: () => void;
   onDeleteWishlist?: (slug: string) => void;
+  onRenameWishlist?: (slug: string, title: string, description: string) => Promise<void>;
 }
 
 const INPUT_CLASS =
@@ -37,11 +39,13 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
   onDeleteItem,
   onOpenImport,
   onDeleteWishlist,
+  onRenameWishlist,
 }) => {
   const { wishlist, is_owner, items } = data;
   const [activeTab, setActiveTab] = useState<'available' | 'reserved'>('available');
   const [copied, setCopied] = useState(false);
   const [showDeleteWishlistModal, setShowDeleteWishlistModal] = useState(false);
+  const [showEditWishlistModal, setShowEditWishlistModal] = useState(false);
   const [reservingItemId, setReservingItemId] = useState<number | null>(null);
   const [guestName, setGuestName] = useState<string>(() => {
     if (currentUser?.display_name) return currentUser.display_name;
@@ -158,6 +162,23 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
     }
   };
 
+  const handleUpdateWishlist = async (newTitle: string, newDesc: string) => {
+    if (onRenameWishlist) {
+      await onRenameWishlist(wishlist.slug, newTitle, newDesc);
+    } else {
+      const res = await fetch(`/api/wishlists/${wishlist.slug}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle, description: newDesc }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || 'Failed to update wishlist.');
+      }
+      onRefresh();
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Wishlist Header Card */}
@@ -165,6 +186,17 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-bold text-slate-50">{wishlist.title}</h1>
+            {is_owner && (
+              <button
+                type="button"
+                onClick={() => setShowEditWishlistModal(true)}
+                aria-label="Edit wishlist details"
+                title="Edit wishlist name and description"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 border border-transparent hover:border-slate-700 transition-colors"
+              >
+                <Edit2 className="w-4 h-4 text-blue-400" />
+              </button>
+            )}
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
               by {wishlist.owner_name}
             </span>
@@ -495,6 +527,13 @@ export const WishlistView: React.FC<WishlistViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+      {showEditWishlistModal && (
+        <EditWishlistModal
+          wishlist={wishlist}
+          onClose={() => setShowEditWishlistModal(false)}
+          onSaved={handleUpdateWishlist}
+        />
       )}
     </div>
   );
